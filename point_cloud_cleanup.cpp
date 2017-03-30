@@ -18,12 +18,15 @@
 namespace fs = boost::filesystem;
 
 std::vector<std::string> getFileList(const std::string& path);
+pcl::PointCloud<pcl::PointXYZ>
+rectangularThreshold(pcl::PointCloud<pcl::PointXYZ>::Ptr src_cloud, std::vector<double> thresh_range);
 
 /*
 
 Steps:
 1. Filter longitudinally
-2. Apply statistical outlier removal
+2. Use RANSAC to fit planes to each of the four walls
+2. Apply statistical outlier removal (?)
 
 */
 
@@ -82,41 +85,17 @@ int main (int argc, char** argv)
         // viewer.addPointCloud(src_cloud, src_cloud_colour_handler, "source_cloud");
 
         /*          Passthrough filter          */
-        // Create point clouds for each of the 4 sides of the tunnel
-        // Global threshold
-        pcl::PassThrough<pcl::PointXYZ> pass_z;
-        pass_z.setInputCloud(src_cloud);
-        pass_z.setFilterFieldName("z");
-        pass_z.setFilterLimits(-5, 0);
-        pass_z.filter(*filtered_cloud);
-        // Left side
-        pcl::PointCloud<pcl::PointXYZ>::Ptr left_cloud (new pcl::PointCloud<pcl::PointXYZ>);
-        pcl::PassThrough<pcl::PointXYZ> pass_left;
-        pass_left.setInputCloud(filtered_cloud);
-        pass_left.setFilterFieldName("x");
-        pass_left.setFilterLimits(-5, 0);
-        pass_left.filter(*left_cloud);
-        // Right side
-        pcl::PointCloud<pcl::PointXYZ>::Ptr right_cloud (new pcl::PointCloud<pcl::PointXYZ>);
-        pcl::PassThrough<pcl::PointXYZ> pass_right;
-        pass_right.setInputCloud(filtered_cloud);
-        pass_right.setFilterFieldName("x");
-        pass_right.setFilterLimits(0, 5);
-        pass_right.filter(*right_cloud);
-        // Up side
-        pcl::PointCloud<pcl::PointXYZ>::Ptr up_cloud (new pcl::PointCloud<pcl::PointXYZ>);
-        pcl::PassThrough<pcl::PointXYZ> pass_up;
-        pass_up.setInputCloud(filtered_cloud);
-        pass_up.setFilterFieldName("y");
-        pass_up.setFilterLimits(0, 5);
-        pass_up.filter(*up_cloud);
-        // Down side
-        pcl::PointCloud<pcl::PointXYZ>::Ptr down_cloud (new pcl::PointCloud<pcl::PointXYZ>);
-        pcl::PassThrough<pcl::PointXYZ> pass_down;
-        pass_down.setInputCloud(filtered_cloud);
-        pass_down.setFilterFieldName("y");
-        pass_down.setFilterLimits(-5, 0);
-        pass_down.filter(*down_cloud);
+        // Depth filter
+        pcl::PassThrough<pcl::PointXYZ> pass;
+        pass.setInputCloud(src_cloud);
+        pass.setFilterFieldName("z");
+        pass.setFilterLimits(-5, 0);
+        pass.filter(*filtered_cloud);
+
+        // Fit a plane to each of the 4 sides of the tunnel
+        *filtered_cloud = rectangularThreshold(filtered_cloud, {-5,0,5,-5,0,5});
+
+
 
         /*          Statistical outlier removal         */
         // pcl::StatisticalOutlierRemoval<pcl::PointXYZ> sor;
@@ -138,49 +117,7 @@ int main (int argc, char** argv)
         // mls.process(mls_points);
         // pcl::copyPointCloud(mls_points, *filtered_cloud);
 
-        const double thresh = 0.1;
-        /*          RANSAC Plane            */
-        pcl::PointCloud<pcl::PointXYZ>::Ptr tmp_cloud (new pcl::PointCloud<pcl::PointXYZ>);
-        std::vector<int> inliers;
-        // Left
-        pcl::SampleConsensusModelPlane<pcl::PointXYZ>::Ptr
-            left_plane (new pcl::SampleConsensusModelPlane<pcl::PointXYZ> (left_cloud));
-        pcl::RandomSampleConsensus<pcl::PointXYZ> ransac_left (left_plane);
-        ransac_left.setDistanceThreshold(thresh);
-        ransac_left.computeModel();
-        ransac_left.getInliers(inliers);
-        pcl::copyPointCloud<pcl::PointXYZ>(*left_cloud, inliers, *filtered_cloud);
-        inliers.clear();
-        // Right
-        pcl::SampleConsensusModelPlane<pcl::PointXYZ>::Ptr
-            right_plane (new pcl::SampleConsensusModelPlane<pcl::PointXYZ> (right_cloud));
-        pcl::RandomSampleConsensus<pcl::PointXYZ> ransac_right (right_plane);
-        ransac_right.setDistanceThreshold(thresh);
-        ransac_right.computeModel();
-        ransac_right.getInliers(inliers);
-        pcl::copyPointCloud<pcl::PointXYZ>(*right_cloud, inliers, *tmp_cloud);
-        *filtered_cloud += *tmp_cloud;
-        inliers.clear();
-        // Up
-        pcl::SampleConsensusModelPlane<pcl::PointXYZ>::Ptr
-            up_plane (new pcl::SampleConsensusModelPlane<pcl::PointXYZ> (up_cloud));
-        pcl::RandomSampleConsensus<pcl::PointXYZ> ransac_up (up_plane);
-        ransac_up.setDistanceThreshold(thresh);
-        ransac_up.computeModel();
-        ransac_up.getInliers(inliers);
-        pcl::copyPointCloud<pcl::PointXYZ>(*up_cloud, inliers, *tmp_cloud);
-        *filtered_cloud += *tmp_cloud;
-        inliers.clear();
-        // Down
-        pcl::SampleConsensusModelPlane<pcl::PointXYZ>::Ptr
-            down_plane (new pcl::SampleConsensusModelPlane<pcl::PointXYZ> (down_cloud));
-        pcl::RandomSampleConsensus<pcl::PointXYZ> ransac_down (down_plane);
-        ransac_down.setDistanceThreshold(thresh);
-        ransac_down.computeModel();
-        ransac_down.getInliers(inliers);
-        pcl::copyPointCloud<pcl::PointXYZ>(*down_cloud, inliers, *tmp_cloud);
-        *filtered_cloud += *tmp_cloud;
-        inliers.clear();
+
 
         pcl::visualization::PointCloudColorHandlerCustom<pcl::PointXYZ> src_colour_handler (src_cloud, 150, 6, 6);
         viewer.addPointCloud (src_cloud, src_colour_handler, "src_cloud");
@@ -217,4 +154,100 @@ std::vector<std::string> getFileList(const std::string& path)
     }
     closedir(dp);
     return files;
+}
+
+/*          RANSAC Plane            */
+pcl::PointCloud<pcl::PointXYZ>
+rectangularThreshold(pcl::PointCloud<pcl::PointXYZ>::Ptr src_cloud, std::vector<double> thresh_range)
+{
+    /*          I/O         */
+    // returns a point cloud of 4 orthogonal planes
+    // thresh_range should be in the form {min_x, mid_x, max_x, min_y, mid_y, max_y}
+
+    const double thresh = 0.1;
+    pcl::PointCloud<pcl::PointXYZ>::Ptr tmp_cloud (new pcl::PointCloud<pcl::PointXYZ>);
+    pcl::PointCloud<pcl::PointXYZ>::Ptr ret_cloud (new pcl::PointCloud<pcl::PointXYZ>);
+
+
+    for (int i = 0; i < 4; ++i)
+    {
+        std::vector<int> inliers;
+
+        // Filter the input cloud into left, right, upper and lower sections
+        pcl::PointCloud<pcl::PointXYZ>::Ptr sub_cloud (new pcl::PointCloud<pcl::PointXYZ>);
+        pcl::PassThrough<pcl::PointXYZ> pass;
+        pass.setInputCloud(src_cloud);
+        if (i < 2)
+        {
+            pass.setFilterFieldName("x");
+            pass.setFilterLimits(thresh_range[i], thresh_range[i+1]);
+        }
+        else
+        {
+            pass.setFilterFieldName("y");
+            pass.setFilterLimits(thresh_range[i+1], thresh_range[i+2]);
+        }
+        pass.filter(*sub_cloud);
+
+        // Use RANSAC to fit a plane to the thresholded points
+        pcl::SampleConsensusModelPlane<pcl::PointXYZ>::Ptr
+            sub_plane (new pcl::SampleConsensusModelPlane<pcl::PointXYZ> (sub_cloud));
+        pcl::RandomSampleConsensus<pcl::PointXYZ> ransac (sub_plane);
+        ransac.setDistanceThreshold(thresh);
+        ransac.computeModel();
+        ransac.getInliers(inliers);
+        pcl::copyPointCloud<pcl::PointXYZ>(*sub_cloud, inliers, *tmp_cloud);
+        *ret_cloud += *tmp_cloud;
+    }
+
+    // pcl::PointCloud<pcl::PointXYZ>::Ptr left_cloud (new pcl::PointCloud<pcl::PointXYZ>);
+    // pcl::PassThrough<pcl::PointXYZ> pass_left;
+    // pass_left.setInputCloud(src_cloud);
+    // pass_left.setFilterFieldName("x");
+    // pass_left.setFilterLimits(-5, 0);
+    // pass_left.filter(*left_cloud);
+    //
+    // pcl::SampleConsensusModelPlane<pcl::PointXYZ>::Ptr
+    //     left_plane (new pcl::SampleConsensusModelPlane<pcl::PointXYZ> (left_cloud));
+    // pcl::RandomSampleConsensus<pcl::PointXYZ> ransac_left (left_plane);
+    // ransac_left.setDistanceThreshold(thresh);
+    // ransac_left.computeModel();
+    // ransac_left.getInliers(inliers);
+    // pcl::copyPointCloud<pcl::PointXYZ>(*left_cloud, inliers, *ret_cloud);
+    // inliers.clear();
+
+    // /*          Right Plane         */
+    // pcl::SampleConsensusModelPlane<pcl::PointXYZ>::Ptr
+    //     right_plane (new pcl::SampleConsensusModelPlane<pcl::PointXYZ> (right_cloud));
+    // pcl::RandomSampleConsensus<pcl::PointXYZ> ransac_right (right_plane);
+    // ransac_right.setDistanceThreshold(thresh);
+    // ransac_right.computeModel();
+    // ransac_right.getInliers(inliers);
+    // pcl::copyPointCloud<pcl::PointXYZ>(*right_cloud, inliers, *tmp_cloud);
+    // *ret_cloud += *tmp_cloud;
+    // inliers.clear();
+    //
+    // /*          Top Plane       */
+    // pcl::SampleConsensusModelPlane<pcl::PointXYZ>::Ptr
+    //     up_plane (new pcl::SampleConsensusModelPlane<pcl::PointXYZ> (up_cloud));
+    // pcl::RandomSampleConsensus<pcl::PointXYZ> ransac_up (up_plane);
+    // ransac_up.setDistanceThreshold(thresh);
+    // ransac_up.computeModel();
+    // ransac_up.getInliers(inliers);
+    // pcl::copyPointCloud<pcl::PointXYZ>(*up_cloud, inliers, *tmp_cloud);
+    // *ret_cloud += *tmp_cloud;
+    // inliers.clear();
+    //
+    // /*          Bottom Plane        */
+    // pcl::SampleConsensusModelPlane<pcl::PointXYZ>::Ptr
+    //     down_plane (new pcl::SampleConsensusModelPlane<pcl::PointXYZ> (down_cloud));
+    // pcl::RandomSampleConsensus<pcl::PointXYZ> ransac_down (down_plane);
+    // ransac_down.setDistanceThreshold(thresh);
+    // ransac_down.computeModel();
+    // ransac_down.getInliers(inliers);
+    // pcl::copyPointCloud<pcl::PointXYZ>(*down_cloud, inliers, *tmp_cloud);
+    // *ret_cloud += *tmp_cloud;
+    // inliers.clear();
+
+    return *ret_cloud;
 }
