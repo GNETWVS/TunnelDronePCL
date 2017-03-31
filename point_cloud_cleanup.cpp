@@ -4,6 +4,7 @@
 #include <string>
 #include <sys/types.h>
 
+#include <pcl/conversions.h>
 #include <pcl/io/pcd_io.h>
 #include <pcl/point_types.h>
 #include <pcl/filters/statistical_outlier_removal.h>
@@ -14,12 +15,14 @@
 #include <pcl/surface/mls.h>
 #include <pcl/sample_consensus/ransac.h>
 #include <pcl/sample_consensus/sac_model_plane.h>
+#include <pcl/filters/voxel_grid.h>
 
 namespace fs = boost::filesystem;
 
+
 std::vector<std::string> getFileList(const std::string& path);
-pcl::PointCloud<pcl::PointXYZ>
-rectangularThreshold(pcl::PointCloud<pcl::PointXYZ>::Ptr src_cloud, std::vector<double> thresh_range);
+pcl::PCLPointCloud2
+rectangularThreshold(pcl::PCLPointCloud2::Ptr src_cloud, std::vector<double> thresh_range);
 
 /*
 
@@ -32,8 +35,12 @@ Steps:
 
 int main (int argc, char** argv)
 {
-    pcl::PointCloud<pcl::PointXYZ>::Ptr src_cloud (new pcl::PointCloud<pcl::PointXYZ>);
-    pcl::PointCloud<pcl::PointXYZ>::Ptr filtered_cloud (new pcl::PointCloud<pcl::PointXYZ>);
+    // pcl::PointCloud<pcl::PointXYZ>::Ptr src_cloud (new pcl::PointCloud<pcl::PointXYZ>);
+    // pcl::PointCloud<pcl::PointXYZ>::Ptr filtered_cloud (new pcl::PointCloud<pcl::PointXYZ>);
+    // pcl::PointCloud<pcl::PointXYZ>::Ptr stitched_cloud (new pcl::PointCloud<pcl::PointXYZ>);
+    pcl::PCLPointCloud2::Ptr src_cloud (new pcl::PCLPointCloud2 ());
+    pcl::PCLPointCloud2::Ptr filtered_cloud (new pcl::PCLPointCloud2 ());
+    pcl::PCLPointCloud2::Ptr stitched_cloud (new pcl::PCLPointCloud2 ());
 
     /*          Handle Input        */
     // Check whether a file has been supplied
@@ -76,17 +83,14 @@ int main (int argc, char** argv)
         // Read cloud data from the supplied file
         pcl::PCDReader reader;
         std::string path = directory + file;
-        reader.read<pcl::PointXYZ> (path, *src_cloud);
+        // reader.read<pcl::PointXYZ> (path, *src_cloud);
+        reader.read(path, *src_cloud);
 
-        /*          Visualisation           */
-        pcl::visualization::PCLVisualizer viewer ("PCD Filtering");
-        // Source point cloud - WHITE
-        // pcl::visualization::PointCloudColorHandlerCustom<pcl::PointXYZ> src_cloud_colour_handler (src_cloud, 255, 255, 255);
-        // viewer.addPointCloud(src_cloud, src_cloud_colour_handler, "source_cloud");
 
         /*          Passthrough filter          */
         // Depth filter
-        pcl::PassThrough<pcl::PointXYZ> pass;
+        // pcl::PassThrough<pcl::PointXYZ> pass;
+        pcl::PassThrough<pcl::PCLPointCloud2> pass;
         pass.setInputCloud(src_cloud);
         pass.setFilterFieldName("z");
         pass.setFilterLimits(-5, 0);
@@ -94,6 +98,9 @@ int main (int argc, char** argv)
 
         // Fit a plane to each of the 4 sides of the tunnel
         *filtered_cloud = rectangularThreshold(filtered_cloud, {-5,0,5,-5,0,5});
+
+        // Add the filtered points to the stitched cloud
+        *stitched_cloud = *filtered_cloud;
 
 
 
@@ -116,28 +123,36 @@ int main (int argc, char** argv)
         // mls.setSearchRadius(0.05);
         // mls.process(mls_points);
         // pcl::copyPointCloud(mls_points, *filtered_cloud);
-
-
-
-        pcl::visualization::PointCloudColorHandlerCustom<pcl::PointXYZ> src_colour_handler (src_cloud, 150, 6, 6);
-        viewer.addPointCloud (src_cloud, src_colour_handler, "src_cloud");
-
-        pcl::visualization::PointCloudColorHandlerCustom<pcl::PointXYZ> filtered_point_colour_handler (filtered_cloud, 250, 250, 250);
-        viewer.addPointCloud (filtered_cloud, filtered_point_colour_handler, "filtered_cloud");
-
-        viewer.addCoordinateSystem (1.0, "cloud", 0);
-        viewer.setBackgroundColor(0.05, 0.05, 0.05, 0); // Setting background to a dark grey
-        viewer.setPointCloudRenderingProperties (pcl::visualization::PCL_VISUALIZER_POINT_SIZE, 2, "src_cloud");
-        viewer.setPointCloudRenderingProperties (pcl::visualization::PCL_VISUALIZER_POINT_SIZE, 2, "filtered_cloud");
-        //viewer.setPosition(800, 400); // Setting visualiser window position
-
-        while (!viewer.wasStopped ())
-        {
-            viewer.spinOnce ();
-        }
     }
+    // TODO: Convert from pointcloudXYZ to pointcloud2
+    // pcl::PCLPointCloud2::Ptr stitched_cloud_2 (new pcl::PCLPointCloud2());
+    // pcl::copyPointCloud(stitched_cloud, stitched_cloud_2);
+    // pcl::VoxelGrid<pcl::PCLPointCloud2> sor;
+    // sor.setInputCloud(stitched_cloud);
+    // sor.setLeafSize(0.01, 0.01, 0.01);
+    // sor.filter(*stitched_cloud);
+
+    // pcl::visualization::PCLVisualizer viewer ("PCD Filtering");
+
+    // pcl::visualization::PointCloudColorHandlerCustom<pcl::PointXYZ> stitched_colour_handler (stitched_cloud, 255, 255, 255);
+    // viewer.addPointCloud (stitched_cloud, stitched_colour_handler, "src_cloud");
+    //
+    // viewer.addCoordinateSystem (1.0, "cloud", 0);
+    // viewer.setBackgroundColor(0.05, 0.05, 0.05, 0); // Setting background to a dark grey
+    // viewer.setPointCloudRenderingProperties (pcl::visualization::PCL_VISUALIZER_POINT_SIZE, 2, "src_cloud");
+    //
+    // while (!viewer.wasStopped ())
+    // {
+    //     viewer.spinOnce ();
+    // }
+
+    pcl::PCDWriter writer;
+    std::string filename = directory + "filtered.pcd";
+    writer.write(filename, *stitched_cloud, Eigen::Vector4f::Zero(), Eigen::Quaternionf::Identity(), false);
+
     return (0);
 }
+
 
 std::vector<std::string> getFileList(const std::string& path)
 {
@@ -156,17 +171,18 @@ std::vector<std::string> getFileList(const std::string& path)
     return files;
 }
 
+
 /*          RANSAC Plane            */
-pcl::PointCloud<pcl::PointXYZ>
-rectangularThreshold(pcl::PointCloud<pcl::PointXYZ>::Ptr src_cloud, std::vector<double> thresh_range)
+pcl::PCLPointCloud2
+rectangularThreshold(pcl::PCLPointCloud2::Ptr src_cloud, std::vector<double> thresh_range)
 {
     /*          I/O         */
     // returns a point cloud of 4 orthogonal planes
     // thresh_range should be in the form {min_x, mid_x, max_x, min_y, mid_y, max_y}
 
     const double thresh = 0.1;
-    pcl::PointCloud<pcl::PointXYZ>::Ptr tmp_cloud (new pcl::PointCloud<pcl::PointXYZ>);
-    pcl::PointCloud<pcl::PointXYZ>::Ptr ret_cloud (new pcl::PointCloud<pcl::PointXYZ>);
+    pcl::PCLPointCloud2::Ptr tmp_cloud (new pcl::PCLPointCloud2);
+    pcl::PCLPointCloud2::Ptr ret_cloud (new pcl::PCLPointCloud2);
 
 
     for (int i = 0; i < 4; ++i)
@@ -174,8 +190,8 @@ rectangularThreshold(pcl::PointCloud<pcl::PointXYZ>::Ptr src_cloud, std::vector<
         std::vector<int> inliers;
 
         // Filter the input cloud into left, right, upper and lower sections
-        pcl::PointCloud<pcl::PointXYZ>::Ptr sub_cloud (new pcl::PointCloud<pcl::PointXYZ>);
-        pcl::PassThrough<pcl::PointXYZ> pass;
+        pcl::PCLPointCloud2::Ptr sub_cloud (new pcl::PCLPointCloud2);
+        pcl::PassThrough<pcl::PCLPointCloud2> pass;
         pass.setInputCloud(src_cloud);
         if (i < 2)
         {
@@ -189,65 +205,18 @@ rectangularThreshold(pcl::PointCloud<pcl::PointXYZ>::Ptr src_cloud, std::vector<
         }
         pass.filter(*sub_cloud);
 
+        // WHY THE FUCK DOESN'T RANSAC SUPPORT PCLPOINTCLOUD2????
+
         // Use RANSAC to fit a plane to the thresholded points
-        pcl::SampleConsensusModelPlane<pcl::PointXYZ>::Ptr
-            sub_plane (new pcl::SampleConsensusModelPlane<pcl::PointXYZ> (sub_cloud));
-        pcl::RandomSampleConsensus<pcl::PointXYZ> ransac (sub_plane);
+        pcl::SampleConsensusModelPlane<pcl::PointXYZRGB>::Ptr
+            sub_plane (new pcl::SampleConsensusModelPlane<pcl::PointXYZRGB> (sub_cloud));
+        pcl::RandomSampleConsensus<pcl::PointXYZRGB> ransac (sub_plane);
         ransac.setDistanceThreshold(thresh);
         ransac.computeModel();
         ransac.getInliers(inliers);
-        pcl::copyPointCloud<pcl::PointXYZ>(*sub_cloud, inliers, *tmp_cloud);
+        pcl::copyPointCloud<pcl::PCLPointCloud2>(*sub_cloud, inliers, *tmp_cloud);
         *ret_cloud += *tmp_cloud;
     }
-
-    // pcl::PointCloud<pcl::PointXYZ>::Ptr left_cloud (new pcl::PointCloud<pcl::PointXYZ>);
-    // pcl::PassThrough<pcl::PointXYZ> pass_left;
-    // pass_left.setInputCloud(src_cloud);
-    // pass_left.setFilterFieldName("x");
-    // pass_left.setFilterLimits(-5, 0);
-    // pass_left.filter(*left_cloud);
-    //
-    // pcl::SampleConsensusModelPlane<pcl::PointXYZ>::Ptr
-    //     left_plane (new pcl::SampleConsensusModelPlane<pcl::PointXYZ> (left_cloud));
-    // pcl::RandomSampleConsensus<pcl::PointXYZ> ransac_left (left_plane);
-    // ransac_left.setDistanceThreshold(thresh);
-    // ransac_left.computeModel();
-    // ransac_left.getInliers(inliers);
-    // pcl::copyPointCloud<pcl::PointXYZ>(*left_cloud, inliers, *ret_cloud);
-    // inliers.clear();
-
-    // /*          Right Plane         */
-    // pcl::SampleConsensusModelPlane<pcl::PointXYZ>::Ptr
-    //     right_plane (new pcl::SampleConsensusModelPlane<pcl::PointXYZ> (right_cloud));
-    // pcl::RandomSampleConsensus<pcl::PointXYZ> ransac_right (right_plane);
-    // ransac_right.setDistanceThreshold(thresh);
-    // ransac_right.computeModel();
-    // ransac_right.getInliers(inliers);
-    // pcl::copyPointCloud<pcl::PointXYZ>(*right_cloud, inliers, *tmp_cloud);
-    // *ret_cloud += *tmp_cloud;
-    // inliers.clear();
-    //
-    // /*          Top Plane       */
-    // pcl::SampleConsensusModelPlane<pcl::PointXYZ>::Ptr
-    //     up_plane (new pcl::SampleConsensusModelPlane<pcl::PointXYZ> (up_cloud));
-    // pcl::RandomSampleConsensus<pcl::PointXYZ> ransac_up (up_plane);
-    // ransac_up.setDistanceThreshold(thresh);
-    // ransac_up.computeModel();
-    // ransac_up.getInliers(inliers);
-    // pcl::copyPointCloud<pcl::PointXYZ>(*up_cloud, inliers, *tmp_cloud);
-    // *ret_cloud += *tmp_cloud;
-    // inliers.clear();
-    //
-    // /*          Bottom Plane        */
-    // pcl::SampleConsensusModelPlane<pcl::PointXYZ>::Ptr
-    //     down_plane (new pcl::SampleConsensusModelPlane<pcl::PointXYZ> (down_cloud));
-    // pcl::RandomSampleConsensus<pcl::PointXYZ> ransac_down (down_plane);
-    // ransac_down.setDistanceThreshold(thresh);
-    // ransac_down.computeModel();
-    // ransac_down.getInliers(inliers);
-    // pcl::copyPointCloud<pcl::PointXYZ>(*down_cloud, inliers, *tmp_cloud);
-    // *ret_cloud += *tmp_cloud;
-    // inliers.clear();
 
     return *ret_cloud;
 }
