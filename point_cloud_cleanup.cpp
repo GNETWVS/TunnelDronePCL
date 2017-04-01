@@ -3,13 +3,15 @@
 #include <vector>
 #include <string>
 #include <sys/types.h>
+#include <iomanip>
+#include <mutex>
+#include <thread>
 
 #include <pcl/conversions.h>
 #include <pcl/io/pcd_io.h>
 #include <pcl/point_types.h>
 #include <pcl/filters/statistical_outlier_removal.h>
 #include <pcl/point_cloud.h>
-#include <pcl/visualization/pcl_visualizer.h>
 #include <pcl/filters/passthrough.h>
 #include <pcl/kdtree/kdtree_flann.h>
 #include <pcl/surface/mls.h>
@@ -21,8 +23,11 @@ namespace fs = boost::filesystem;
 
 
 std::vector<std::string> getFileList(const std::string& path);
+void processPCD(std::string path, pcl::PointCloud<pcl::PointXYZ>::Ptr src_cloud, pcl::PointCloud<pcl::PointXYZ>::Ptr stitched_cloud);
 pcl::PointCloud<pcl::PointXYZ>
-rectangularThreshold(pcl::PointCloud<pcl::PointXYZ>::Ptr src_cloud, std::vector<double> thresh_range);
+    rectangularThreshold(pcl::PointCloud<pcl::PointXYZ>::Ptr src_cloud, std::vector<double> thresh_range);
+
+std::mutex stitch_mutex;
 
 // TODO
 // - Deal with potential culverts
@@ -31,15 +36,17 @@ rectangularThreshold(pcl::PointCloud<pcl::PointXYZ>::Ptr src_cloud, std::vector<
 int main (int argc, char** argv)
 {
     pcl::PointCloud<pcl::PointXYZ>::Ptr src_cloud (new pcl::PointCloud<pcl::PointXYZ> ());
-    pcl::PointCloud<pcl::PointXYZ>::Ptr filtered_cloud (new pcl::PointCloud<pcl::PointXYZ> ());
+    // pcl::PointCloud<pcl::PointXYZ>::Ptr filtered_cloud (new pcl::PointCloud<pcl::PointXYZ> ());
     pcl::PointCloud<pcl::PointXYZ>::Ptr stitched_cloud (new pcl::PointCloud<pcl::PointXYZ> ());
 
     /*          Handle Input        */
     // Check whether a file has been supplied
     if (argc < 3)
     {
-        std::cout << "Input should be of the form:\n"
-                  << "./cleanup_pcd -f <file> or ./cleanup_pcd -d <directory>" << std::endl;
+        std::cout << "Usage:\n"
+                  << "\t-f <file>" << "\t\tProcess a single file.\n"
+                  << "\t-d <directory>" << "\t\tProcess all of the pcd files in a directory."
+                  << std::endl;
         return -1;
     }
 
@@ -73,49 +80,79 @@ int main (int argc, char** argv)
         }
     }
 
-    int num_files = files_to_process.size();
-    int  j = 0;
-    for (auto file : files_to_process)
+    // Create 4 threads to process 4 files simultaneously
+    // - If there are fewer than 4 files, then make that many threads
+    // Once a thread returns, if there are still files to process then restart it on a new file
+    std::vector<std::thread> process_threads;
+    int i = 0;
+    while (i < 4 && i < files_to_process.size())
     {
+        // Create at most 4 threads
+        std::string path = directory + files_to_process[i];
+        process_threads.push_back(std::thread(processPCD, path, src_cloud, stitched_cloud));
+        ++i;
+        std::cout << "Processing: " << i << "/" << files_to_process.size() << std::endl;
+    }
+    while (i < files_to_process.size())
+    {
+        process_threads[0].join();
+        process_threads.erase(process_threads.begin());
 
-        // Read cloud data from the supplied file
-        pcl::PCDReader reader;
-        std::string path = directory + file;
-        // reader.read<pcl::PointXYZ> (path, *src_cloud);
-        reader.read(path, *src_cloud);
-
-
-        /*          Passthrough filter          */
-        // Depth filter
-        // pcl::PassThrough<pcl::PointXYZ> pass;
-        pcl::PassThrough<pcl::PointXYZ> pass;
-        pass.setInputCloud(src_cloud);
-        pass.setFilterFieldName("z");
-        pass.setFilterLimits(-5, 0);
-        pass.filter(*filtered_cloud);
-
-        // Fit a plane to each of the 4 sides of the tunnel
-        *filtered_cloud = rectangularThreshold(filtered_cloud, {-5,0,5,-5,0,5});
-
-        // Add the filtered points to the stitched cloud
-        *stitched_cloud += *filtered_cloud;
-        std::cout << ++j << "/" << num_files << std::endl;
-
-        /*          Resampling - Not very effective          */
-        // Create a KD tree
-        // pcl::search::KdTree<pcl::PointXYZ>::Ptr tree (new pcl::search::KdTree<pcl::PointXYZ>);
-        // pcl::PointCloud<pcl::PointNormal> mls_points;
-        // pcl::MovingLeastSquares<pcl::PointXYZ, pcl::PointNormal> mls;
-        // mls.setComputeNormals(true);
-        // mls.setInputCloud(filtered_cloud);
-        // mls.setPolynomialFit(false);
-        // mls.setSearchMethod(tree);
-        // mls.setSearchRadius(0.05);
-        // mls.process(mls_points);
-        // pcl::copyPointCloud(mls_points, *filtered_cloud);
+        // Since a thread has finished, create a new one
+        std::string path = directory + files_to_process[i];
+        process_threads.push_back(std::thread(processPCD, path, src_cloud, stitched_cloud));
+        ++i;
+        std::cout << "Processing: " << i << "/" << files_to_process.size() << std::endl;
+    }
+    for (auto t = process_threads.begin(); t < process_threads.end(); ++t)
+    {
+        t->join();
     }
 
+    // int num_files = files_to_process.size();
+    // int  j = 0;
+    // for (auto file : files_to_process)
+    // {
+    //
+    //     // Read cloud data from the supplied file
+    //     pcl::PCDReader reader;
+    //     std::string path = directory + file;
+    //     // reader.read<pcl::PointXYZ> (path, *src_cloud);
+    //     reader.read(path, *src_cloud);
+    //
+    //
+    //     /*          Passthrough filter          */
+    //     // Depth filter
+    //     // pcl::PassThrough<pcl::PointXYZ> pass;
+    //     pcl::PassThrough<pcl::PointXYZ> pass;
+    //     pass.setInputCloud(src_cloud);
+    //     pass.setFilterFieldName("z");
+    //     pass.setFilterLimits(-5, 0);
+    //     pass.filter(*filtered_cloud);
+    //
+    //     // Fit a plane to each of the 4 sides of the tunnel
+    //     *filtered_cloud = rectangularThreshold(filtered_cloud, {-5,0,5,-5,0,5});
+    //
+    //     // Add the filtered points to the stitched cloud
+    //     *stitched_cloud += *filtered_cloud;
+    //     std::cout << ++j << "/" << num_files << std::endl;
+    //
+    //     /*          Resampling - Not very effective          */
+    //     // Create a KD tree
+    //     // pcl::search::KdTree<pcl::PointXYZ>::Ptr tree (new pcl::search::KdTree<pcl::PointXYZ>);
+    //     // pcl::PointCloud<pcl::PointNormal> mls_points;
+    //     // pcl::MovingLeastSquares<pcl::PointXYZ, pcl::PointNormal> mls;
+    //     // mls.setComputeNormals(true);
+    //     // mls.setInputCloud(filtered_cloud);
+    //     // mls.setPolynomialFit(false);
+    //     // mls.setSearchMethod(tree);
+    //     // mls.setSearchRadius(0.05);
+    //     // mls.process(mls_points);
+    //     // pcl::copyPointCloud(mls_points, *filtered_cloud);
+    // }
+
     /*          Statistical outlier removal         */
+    std::cout << "Removing statistical outliers." << std::endl;
     pcl::StatisticalOutlierRemoval<pcl::PointXYZ> sor;
     sor.setInputCloud(stitched_cloud);
     sor.setMeanK(50);
@@ -123,6 +160,7 @@ int main (int argc, char** argv)
     sor.filter(*stitched_cloud);
 
     /*          Downsampling            */
+    std::cout << "Downsampling stitched point cloud." << std::endl;
     pcl::PCLPointCloud2::Ptr stitched_cloud_2 (new pcl::PCLPointCloud2());
     // PointCloud -> PCLPointCloud2
     pcl::toPCLPointCloud2(*stitched_cloud, *stitched_cloud_2);
@@ -148,7 +186,6 @@ int main (int argc, char** argv)
     std::string filename = directory + "filtered.pcd";
     pcl::PCDWriter writer;
     writer.write(filename, *stitched_cloud_2, Eigen::Vector4f::Zero (), Eigen::Quaternionf::Identity (), false);
-
     return (0);
 }
 
@@ -170,6 +207,31 @@ std::vector<std::string> getFileList(const std::string& path)
     return files;
 }
 
+/*          Process a PCD file          */
+void processPCD(std::string path, pcl::PointCloud<pcl::PointXYZ>::Ptr src_cloud, pcl::PointCloud<pcl::PointXYZ>::Ptr stitched_cloud)
+{
+    // Read cloud data from the supplied file
+    pcl::PCDReader reader;
+    reader.read(path, *src_cloud);
+
+    pcl::PointCloud<pcl::PointXYZ>::Ptr filtered_cloud (new pcl::PointCloud<pcl::PointXYZ> ());
+
+    /*          Passthrough filter          */
+    // Depth filter
+    // pcl::PassThrough<pcl::PointXYZ> pass;
+    pcl::PassThrough<pcl::PointXYZ> pass;
+    pass.setInputCloud(src_cloud);
+    pass.setFilterFieldName("z");
+    pass.setFilterLimits(-5, 0);
+    pass.filter(*filtered_cloud);
+
+    // Fit a plane to each of the 4 sides of the tunnel
+    *filtered_cloud = rectangularThreshold(filtered_cloud, {-5,0,5,-5,0,5});
+
+    // Add the filtered points to the stitched cloud
+    std::lock_guard<std::mutex> lock(stitch_mutex);
+    *stitched_cloud += *filtered_cloud;
+}
 
 /*          RANSAC Plane            */
 pcl::PointCloud<pcl::PointXYZ>
