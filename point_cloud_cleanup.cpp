@@ -6,6 +6,8 @@
 #include <iomanip>
 #include <mutex>
 #include <thread>
+#include <fstream>
+#include <sstream>
 
 #include <pcl/conversions.h>
 #include <pcl/io/pcd_io.h>
@@ -18,6 +20,7 @@
 #include <pcl/sample_consensus/ransac.h>
 #include <pcl/sample_consensus/sac_model_plane.h>
 #include <pcl/filters/voxel_grid.h>
+#include <pcl/common/transforms.h>
 
 namespace fs = boost::filesystem;
 
@@ -29,6 +32,7 @@ pcl::PointCloud<pcl::PointXYZ>
     rectangularThreshold(pcl::PointCloud<pcl::PointXYZ>::Ptr src_cloud, std::vector<double> thresh_range);
 
 std::mutex stitch_mutex;
+std::vector<std::vector<double> > translation_and_rotation;
 
 // TODO
 // - Deal with potential culverts
@@ -89,14 +93,69 @@ int main (int argc, char** argv)
         return -1;
     }
 
+    // In the order dx, dy, dz, rotx, roty, rotz
+    std::vector<std::vector<double> > translation_and_rotation_raw;
     if (argc > 3 && !std::strcmp(argv[3], "-t"))
     {
-        // TODO: Read txt file here
+        std::cout << "Using position information supplied by " << argv[4] << "." << std::endl;
+        std::string line;
+        std::ifstream infile(argv[4]);
+        const int rows_to_skip = 2;
+        const int cols_to_skip = 2;
+        int row = -1;
+        while (std::getline(infile, line))
+        {
+            // Skip header rows
+            if (rows_to_skip > ++row)
+            {
+                continue;
+            }
+
+            translation_and_rotation_raw.push_back({});
+
+            std::istringstream iss (line);
+            double val = 0.0;
+            int col = 0;
+            while (iss >> val)
+            {
+                if (cols_to_skip > col++)
+                {
+                    continue;
+                }
+                translation_and_rotation_raw[row - rows_to_skip].push_back(val);
+            }
+        }
     }
 
     // Remove non pcd files
     files_to_process.erase(
         std::remove_if(files_to_process.begin(), files_to_process.end(), filePredicate), files_to_process.end());
+
+    // TODO: Check the accuracy of the calculation below
+
+    // Use the number of known pcd files to match translation and rotation values to each file
+    int num_rows_per_file = translation_and_rotation_raw.size() / files_to_process.size();
+    int num_cols = translation_and_rotation_raw[0].size();
+    // Find the average translation and rotation value for each axis
+    for (int row = 0; row < translation_and_rotation_raw.size(); ++row)
+    {
+        if (row % num_rows_per_file == 0)
+        {
+            translation_and_rotation.push_back({0.0, 0.0, 0.0, 0.0, 0.0, 0.0});
+        }
+        for (int col = 0; col < num_cols; ++col)
+        {
+            int new_row = row / (translation_and_rotation_raw.size() / num_rows_per_file);
+            translation_and_rotation[new_row][col] += translation_and_rotation_raw[row][col];
+        }
+    }
+    for (int row = 0; row < translation_and_rotation.size(); ++row)
+    {
+        for (int col = 0; col < num_cols; ++col)
+        {
+            translation_and_rotation[row][col] /= num_rows_per_file;
+        }
+    }
 
     // Create 4 threads to process 4 files simultaneously
     // - If there are fewer than 4 files, then make that many threads
@@ -173,6 +232,21 @@ void processPCD(std::string path, pcl::PointCloud<pcl::PointXYZ>::Ptr src_cloud,
     pcl::PCDReader reader;
     reader.read(path, *src_cloud);
 
+    /*          Rotation and translation            */
+    int idx = path.find(".");
+    int i = stoi(path.substr(idx-1,1));
+    Eigen::Affine3f transform = Eigen::Affine3f::Identity();
+    transform.translation() << -1*translation_and_rotation[i][0], -1*translation_and_rotation[i][1],
+                                -1*translation_and_rotation[i][2];
+    double rotx = translation_and_rotation[i][3],
+           roty = translation_and_rotation[i][4],
+           rotz = translation_and_rotation[i][5];
+    transform.rotate (Eigen::AngleAxisf (-1*rotx, Eigen::Vector3f::UnitX()));
+    transform.rotate (Eigen::AngleAxisf (-1*roty, Eigen::Vector3f::UnitY()));
+    transform.rotate (Eigen::AngleAxisf (-1*rotz, Eigen::Vector3f::UnitZ()));
+    pcl::transformPointCloud(*src_cloud, *src_cloud, transform);
+
+
     pcl::PointCloud<pcl::PointXYZ>::Ptr filtered_cloud (new pcl::PointCloud<pcl::PointXYZ> ());
 
     /*          Passthrough filter          */
@@ -225,7 +299,7 @@ rectangularThreshold(pcl::PointCloud<pcl::PointXYZ>::Ptr src_cloud, std::vector<
         }
         pass.filter(*sub_cloud);
 
-        if (sub_cloud->size() == 0)
+        if (sub_cloud->size() < 5)
         {
             continue;
         }
@@ -242,13 +316,13 @@ rectangularThreshold(pcl::PointCloud<pcl::PointXYZ>::Ptr src_cloud, std::vector<
         long_pass.setInputCloud(sub_cloud);
         long_pass.setFilterFieldName("z");
         // Five wall segments for now
-        for (int j = 5; j > -4; --j)
+        for (int j = 0; j > -5; --j)
         {
             pcl::PointCloud<pcl::PointXYZ>::Ptr tmp (new pcl::PointCloud<pcl::PointXYZ>);
             long_pass.setFilterLimits(j - 1, j);
             long_pass.filter(*tmp);
 
-            if (tmp->size() == 0)
+            if (tmp->size() < 5)
             {
                 // Empty point clouds can't have planes fitted to them
                 continue;
