@@ -75,6 +75,7 @@ int main (int argc, char** argv)
     {
         std::string filename = argv[2];
         files_to_process.push_back(filename);
+        // TODO: Write a single processed pcd file to the correct location
     }
     else if (!std::strcmp(argv[1], "-d"))
     {
@@ -88,15 +89,9 @@ int main (int argc, char** argv)
         return -1;
     }
 
-    if (!std::strcmp(argv[3], "-t"))
+    if (argc > 3 && !std::strcmp(argv[3], "-t"))
     {
         // TODO: Read txt file here
-    }
-    else
-    {
-        std::cout << "Command \"" << argv[2] << "\" not recognised." << std::endl;
-        helpMessage();
-        return -1;
     }
 
     // Remove non pcd files
@@ -213,6 +208,7 @@ rectangularThreshold(pcl::PointCloud<pcl::PointXYZ>::Ptr src_cloud, std::vector<
     {
         std::vector<int> inliers;
 
+        /*              Lateral thresholding            */
         // Filter the input cloud into left, right, upper and lower sections
         pcl::PointCloud<pcl::PointXYZ>::Ptr sub_cloud (new pcl::PointCloud<pcl::PointXYZ>);
         pcl::PassThrough<pcl::PointXYZ> pass;
@@ -229,22 +225,46 @@ rectangularThreshold(pcl::PointCloud<pcl::PointXYZ>::Ptr src_cloud, std::vector<
         }
         pass.filter(*sub_cloud);
 
+        if (sub_cloud->size() == 0)
+        {
+            continue;
+        }
+
         /*          Statistical outlier removal         */
         pcl::StatisticalOutlierRemoval<pcl::PointXYZ> sor;
         sor.setInputCloud(sub_cloud);
         sor.setMeanK(50);
-        sor.setStddevMulThresh(2.0);
+        sor.setStddevMulThresh(1.0);
         sor.filter(*sub_cloud);
 
-        // Use RANSAC to fit a plane to the thresholded points
-        pcl::SampleConsensusModelPlane<pcl::PointXYZ>::Ptr
-            sub_plane (new pcl::SampleConsensusModelPlane<pcl::PointXYZ> (sub_cloud));
-        pcl::RandomSampleConsensus<pcl::PointXYZ> ransac (sub_plane);
-        ransac.setDistanceThreshold(thresh);
-        ransac.computeModel();
-        ransac.getInliers(inliers);
-        pcl::copyPointCloud<pcl::PointXYZ>(*sub_cloud, inliers, *tmp_cloud);
-        *ret_cloud += *tmp_cloud;
+        /*          Split longitudinally            */
+        pcl::PassThrough<pcl::PointXYZ> long_pass;
+        long_pass.setInputCloud(sub_cloud);
+        long_pass.setFilterFieldName("z");
+        // Five wall segments for now
+        for (int j = 5; j > -4; --j)
+        {
+            pcl::PointCloud<pcl::PointXYZ>::Ptr tmp (new pcl::PointCloud<pcl::PointXYZ>);
+            long_pass.setFilterLimits(j - 1, j);
+            long_pass.filter(*tmp);
+
+            if (tmp->size() == 0)
+            {
+                // Empty point clouds can't have planes fitted to them
+                continue;
+            }
+
+            /*          RANSAC plane fitting            */
+            // Fit a plane to each wall segment
+            pcl::SampleConsensusModelPlane<pcl::PointXYZ>::Ptr
+                sub_plane (new pcl::SampleConsensusModelPlane<pcl::PointXYZ> (tmp));
+            pcl::RandomSampleConsensus<pcl::PointXYZ> ransac (sub_plane);
+            ransac.setDistanceThreshold(thresh);
+            ransac.computeModel();
+            ransac.getInliers(inliers);
+            pcl::copyPointCloud<pcl::PointXYZ>(*tmp, inliers, *tmp_cloud);
+            *ret_cloud += *tmp_cloud;
+        }
     }
     return *ret_cloud;
 }
