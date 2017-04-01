@@ -16,7 +16,6 @@
 #include <pcl/point_cloud.h>
 #include <pcl/filters/passthrough.h>
 #include <pcl/kdtree/kdtree_flann.h>
-#include <pcl/surface/mls.h>
 #include <pcl/sample_consensus/ransac.h>
 #include <pcl/sample_consensus/sac_model_plane.h>
 #include <pcl/filters/voxel_grid.h>
@@ -35,7 +34,6 @@ pcl::PointCloud<pcl::PointXYZ>
 std::mutex stitch_mutex;
 std::vector<std::vector<double> > translation_and_rotation;
 bool transformations_file_supplied = false;
-
 
 /*          Method overview         */
 // 1. Rotate & translate if TrackingInfo.txt present
@@ -271,6 +269,12 @@ void processPCD(std::string path, pcl::PointCloud<pcl::PointXYZ>::Ptr src_cloud,
     // Add the filtered points to the stitched cloud
     std::lock_guard<std::mutex> lock(stitch_mutex);
     *stitched_cloud += *filtered_cloud;
+
+    // Record the name of the file
+    int idx = path.find_last_of("/");
+    std::string filename = path.substr(idx + 1);
+
+    std::cout << "Processed " << filename << std::endl;
 }
 
 /*          RANSAC Plane            */
