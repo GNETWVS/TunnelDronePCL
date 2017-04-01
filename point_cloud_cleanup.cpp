@@ -31,15 +31,11 @@ void processPCD(std::string path, pcl::PointCloud<pcl::PointXYZ>::Ptr src_cloud,
 pcl::PointCloud<pcl::PointXYZ>
     rectangularThreshold(pcl::PointCloud<pcl::PointXYZ>::Ptr src_cloud, std::vector<double> thresh_range);
 
+// TODO: Reduce the scope of these global variables
 std::mutex stitch_mutex;
 std::vector<std::vector<double> > translation_and_rotation;
+bool transformations_file_supplied = false;
 
-// TODO
-// - Deal with potential culverts
-// - Deal with tunnels
-
-// RANSAC Plane fit over small regions in the z-direction (1m resolution?)
-// Rotate and translate according to TrackingInfo.txt
 
 /*          Method overview         */
 // 1. Rotate & translate if TrackingInfo.txt present
@@ -95,8 +91,9 @@ int main (int argc, char** argv)
 
     // In the order dx, dy, dz, rotx, roty, rotz
     std::vector<std::vector<double> > translation_and_rotation_raw;
-    if (argc > 3 && !std::strcmp(argv[3], "-t"))
+    if (argc > 4 && !std::strcmp(argv[3], "-t"))
     {
+        transformations_file_supplied = true;
         std::cout << "Using position information supplied by " << argv[4] << "." << std::endl;
         std::string line;
         std::ifstream infile(argv[4]);
@@ -130,30 +127,38 @@ int main (int argc, char** argv)
     // Remove non pcd files
     files_to_process.erase(
         std::remove_if(files_to_process.begin(), files_to_process.end(), filePredicate), files_to_process.end());
+    if (files_to_process.size() == 0)
+    {
+        std::cout << "No PCD files found." << std::endl;
+        return -1;
+    }
 
     // TODO: Check the accuracy of the calculation below
 
-    // Use the number of known pcd files to match translation and rotation values to each file
-    int num_rows_per_file = translation_and_rotation_raw.size() / files_to_process.size();
-    int num_cols = translation_and_rotation_raw[0].size();
-    // Find the average translation and rotation value for each axis
-    for (int row = 0; row < translation_and_rotation_raw.size(); ++row)
+    if (transformations_file_supplied)
     {
-        if (row % num_rows_per_file == 0)
+        // Use the number of known pcd files to match translation and rotation values to each file
+        int num_rows_per_file = translation_and_rotation_raw.size() / files_to_process.size();
+        int num_cols = translation_and_rotation_raw[0].size();
+        // Find the average translation and rotation value for each axis
+        for (int row = 0; row < translation_and_rotation_raw.size(); ++row)
         {
-            translation_and_rotation.push_back({0.0, 0.0, 0.0, 0.0, 0.0, 0.0});
+            if (row % num_rows_per_file == 0)
+            {
+                translation_and_rotation.push_back({0.0, 0.0, 0.0, 0.0, 0.0, 0.0});
+            }
+            for (int col = 0; col < num_cols; ++col)
+            {
+                int new_row = row / (translation_and_rotation_raw.size() / num_rows_per_file);
+                translation_and_rotation[new_row][col] += translation_and_rotation_raw[row][col];
+            }
         }
-        for (int col = 0; col < num_cols; ++col)
+        for (int row = 0; row < translation_and_rotation.size(); ++row)
         {
-            int new_row = row / (translation_and_rotation_raw.size() / num_rows_per_file);
-            translation_and_rotation[new_row][col] += translation_and_rotation_raw[row][col];
-        }
-    }
-    for (int row = 0; row < translation_and_rotation.size(); ++row)
-    {
-        for (int col = 0; col < num_cols; ++col)
-        {
-            translation_and_rotation[row][col] /= num_rows_per_file;
+            for (int col = 0; col < num_cols; ++col)
+            {
+                translation_and_rotation[row][col] /= num_rows_per_file;
+            }
         }
     }
 
@@ -233,18 +238,21 @@ void processPCD(std::string path, pcl::PointCloud<pcl::PointXYZ>::Ptr src_cloud,
     reader.read(path, *src_cloud);
 
     /*          Rotation and translation            */
-    int idx = path.find(".");
-    int i = stoi(path.substr(idx-1,1));
-    Eigen::Affine3f transform = Eigen::Affine3f::Identity();
-    transform.translation() << -1*translation_and_rotation[i][0], -1*translation_and_rotation[i][1],
-                                -1*translation_and_rotation[i][2];
-    double rotx = translation_and_rotation[i][3],
-           roty = translation_and_rotation[i][4],
-           rotz = translation_and_rotation[i][5];
-    transform.rotate (Eigen::AngleAxisf (-1*rotx, Eigen::Vector3f::UnitX()));
-    transform.rotate (Eigen::AngleAxisf (-1*roty, Eigen::Vector3f::UnitY()));
-    transform.rotate (Eigen::AngleAxisf (-1*rotz, Eigen::Vector3f::UnitZ()));
-    pcl::transformPointCloud(*src_cloud, *src_cloud, transform);
+    if (transformations_file_supplied)
+    {
+        int idx = path.find(".");
+        int i = stoi(path.substr(idx-1,1));
+        Eigen::Affine3f transform = Eigen::Affine3f::Identity();
+        transform.translation() << -1*translation_and_rotation[i][0], -1*translation_and_rotation[i][1],
+                                    -1*translation_and_rotation[i][2];
+        double rotx = translation_and_rotation[i][3],
+               roty = translation_and_rotation[i][4],
+               rotz = translation_and_rotation[i][5];
+        transform.rotate (Eigen::AngleAxisf (-1*rotx, Eigen::Vector3f::UnitX()));
+        transform.rotate (Eigen::AngleAxisf (-1*roty, Eigen::Vector3f::UnitY()));
+        transform.rotate (Eigen::AngleAxisf (-1*rotz, Eigen::Vector3f::UnitZ()));
+        pcl::transformPointCloud(*src_cloud, *src_cloud, transform);
+    }
 
 
     pcl::PointCloud<pcl::PointXYZ>::Ptr filtered_cloud (new pcl::PointCloud<pcl::PointXYZ> ());
