@@ -8,6 +8,7 @@
 #include <thread>
 #include <fstream>
 #include <sstream>
+#include <algorithm>
 
 #include <pcl/common/common.h>
 #include <pcl/conversions.h>
@@ -36,7 +37,7 @@ void transformCloud(pcl::PointCloud<pcl::PointXYZ>::Ptr src_cloud, double rot_x,
 const double slam_range = 5.0; // 5m
 const int point_scale = 1000; // Changes depending on how points were collected
 const int segmentation_resolution = 1;
-const bool flipped = true;
+const bool flipped = false;
 
 // TODO: Reduce the scope of these global variables
 std::mutex stitch_mutex;
@@ -99,6 +100,7 @@ int main (int argc, char** argv)
         return -1;
     }
 
+    // Read transformation information from a supplied file
     // In the order dx, dy, dz, rotx, roty, rotz
     std::vector<std::vector<double> > translation_and_rotation_raw;
     if (argc > 4 && !std::strcmp(argv[3], "-t"))
@@ -143,6 +145,24 @@ int main (int argc, char** argv)
         return -1;
     }
 
+    // Sort files_to_process into ascending order
+    struct compareFileNamesStruct
+    {
+        bool operator() (std::string &a, std::string &b)
+        {
+            size_t a_idx_start = a.find_last_of("D") + 1;
+            size_t a_idx_end = a.find(".");
+            int a_int = stoi(a.substr(a_idx_start, a_idx_end - a_idx_start));
+
+            size_t b_idx_start = b.find_last_of("D") + 1;
+            size_t b_idx_end = b.find(".");
+            int b_int = stoi(b.substr(b_idx_start, b_idx_end - b_idx_start));
+
+            return a_int < b_int;
+        }
+    } compareFilenames;
+    std::sort(files_to_process.begin(), files_to_process.end(), compareFilenames);
+
     // TODO: Check the accuracy of the calculation below
 
     if (transformations_file_supplied)
@@ -172,6 +192,7 @@ int main (int argc, char** argv)
         }
     }
 
+    /*          Processing          */
     // Create 4 threads to process 4 files simultaneously
     // - If there are fewer than 4 files, then make that many threads
     // Once a thread returns, if there are still files to process then restart it on a new file
@@ -253,7 +274,7 @@ void processPCD(std::string path, pcl::PointCloud<pcl::PointXYZ>::Ptr stitched_c
     pcl::StatisticalOutlierRemoval<pcl::PointXYZ> sor;
     sor.setInputCloud(src_cloud);
     sor.setMeanK(50);
-    sor.setStddevMulThresh(2.0); // Weak filtering
+    sor.setStddevMulThresh(1.0); // Weak filtering
     sor.filter(*src_cloud);
 
     // Find extrema of the cloud
@@ -290,8 +311,8 @@ void processPCD(std::string path, pcl::PointCloud<pcl::PointXYZ>::Ptr stitched_c
     pass.filter(*filtered_cloud);
 
     /*          RANSAC plane fit            */
-    *filtered_cloud = rectangularThreshold(filtered_cloud, {- slam_range * point_scale,0, slam_range * point_scale,
-                                                            - slam_range * point_scale,0, slam_range * point_scale});
+    // *filtered_cloud = rectangularThreshold(filtered_cloud, {- slam_range * point_scale,0, slam_range * point_scale,
+    //                                                         - slam_range * point_scale,0, slam_range * point_scale});
 
     // Add the filtered points to the stitched cloud
     std::lock_guard<std::mutex> lock(stitch_mutex);
@@ -313,7 +334,7 @@ rectangularThreshold(pcl::PointCloud<pcl::PointXYZ>::Ptr src_cloud, std::vector<
     // returns a point cloud of 4 orthogonal planes
     // thresh_range should be in the form {min_x, mid_x, max_x, min_y, mid_y, max_y}
 
-    const double thresh = 0.1 * point_scale;
+    const double thresh = 5 * point_scale;
     pcl::PointCloud<pcl::PointXYZ>::Ptr tmp_cloud (new pcl::PointCloud<pcl::PointXYZ>);
     pcl::PointCloud<pcl::PointXYZ>::Ptr ret_cloud (new pcl::PointCloud<pcl::PointXYZ>);
 
