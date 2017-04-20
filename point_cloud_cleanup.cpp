@@ -269,10 +269,18 @@ int main (int argc, char** argv)
         pass.setFilterLimits(0, 10 * point_scale);
         pass.filter(*src_cloud);
 
+        // Downsample both clouds
+        pcl::VoxelGrid<pcl::PointXYZ> grid;
+        grid.setLeafSize(0.1*point_scale, 0.1*point_scale, 0.1*point_scale);
+        grid.setInputCloud(src_cloud);
+        grid.filter(*src_cloud);
+        grid.setInputCloud(stitched_cloud);
+        grid.filter(*stitched_cloud);
+
         // Remove outliers
         pcl::StatisticalOutlierRemoval<pcl::PointXYZ> sor;
         sor.setInputCloud(src_cloud);
-        sor.setMeanK(50);
+        sor.setMeanK(1000);
         sor.setStddevMulThresh(1.0);
         sor.filter(*src_cloud);
 
@@ -286,19 +294,13 @@ int main (int argc, char** argv)
             alignClouds(src_cloud, stitched_cloud, 100);
             *stitched_cloud += *src_cloud;
         }
-
-        // Downsample result
-        pcl::VoxelGrid<pcl::PointXYZ> grid;
-        grid.setLeafSize(0.1*point_scale, 0.1*point_scale, 0.1*point_scale);
-        grid.setInputCloud(stitched_cloud);
-        grid.filter(*stitched_cloud);
     }
 
     // Remove outliers from final result
     pcl::StatisticalOutlierRemoval<pcl::PointXYZ> sor;
     sor.setInputCloud(stitched_cloud);
-    sor.setMeanK(50);
-    sor.setStddevMulThresh(1.5);
+    sor.setMeanK(1000);
+    sor.setStddevMulThresh(1.0);
     sor.filter(*stitched_cloud);
 
     // /*          Downsampling            */
@@ -380,14 +382,32 @@ void alignClouds(pcl::PointCloud<pcl::PointXYZ>::Ptr src_cloud,
     point_representation.setRescaleValues(alpha);
 
     pcl::IterativeClosestPointNonLinear<pcl::PointNormal, pcl::PointNormal> reg;
-    reg.setTransformationEpsilon(1e-12);
-    reg.setMaxCorrespondenceDistance(10000);
+    reg.setTransformationEpsilon(1e-6);
+
+    reg.setMaxCorrespondenceDistance(1 * point_scale);
     reg.setPointRepresentation(boost::make_shared<const MyPointRepresentation> (point_representation));
 
     reg.setInputSource(src_normals);
     reg.setInputTarget(stitched_normals);
 
+    Eigen::Matrix4f Ti = Eigen::Matrix4f::Identity (), prev, stitched_to_src;
     pcl::PointCloud<pcl::PointNormal>::Ptr reg_result = src_normals;
     reg.setMaximumIterations(num_iters);
-    pcl::transformPointCloud(*src_cloud, *src_cloud, reg.getFinalTransformation());
+
+    src_normals = reg_result;
+    reg.setInputSource(src_normals);
+    reg.align(*reg_result);
+
+    Ti *= reg.getFinalTransformation();
+
+    if (fabs ((reg.getLastIncrementalTransformation() - prev).sum()) < reg.getTransformationEpsilon ())
+    {
+        reg.setMaxCorrespondenceDistance(reg.getMaxCorrespondenceDistance() - 0.01 * point_scale);
+    }
+
+    prev = reg.getLastIncrementalTransformation();
+
+    stitched_to_src = Ti.inverse();
+    std::cout << stitched_to_src << std::endl;
+    pcl::transformPointCloud(*stitched_cloud, *stitched_cloud, stitched_to_src);
 }
