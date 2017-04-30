@@ -25,6 +25,8 @@
 #include <pcl/registration/icp.h>
 #include <pcl/registration/icp_nl.h>
 #include <pcl/registration/transforms.h>
+#include <pcl/registration/ia_ransac.h>
+#include <pcl/features/fpfh.h>
 
 #include <boost/make_shared.hpp>
 
@@ -266,7 +268,7 @@ int main (int argc, char** argv)
         pcl::PassThrough<pcl::PointXYZ> pass;
         pass.setInputCloud(src_cloud);
         pass.setFilterFieldName("z");
-        pass.setFilterLimits(0, 10 * point_scale);
+        pass.setFilterLimits(0, 5 * point_scale);
         pass.filter(*src_cloud);
 
         // Downsample both clouds
@@ -277,12 +279,12 @@ int main (int argc, char** argv)
         grid.setInputCloud(stitched_cloud);
         grid.filter(*stitched_cloud);
 
-        // Remove outliers
-        pcl::StatisticalOutlierRemoval<pcl::PointXYZ> sor;
-        sor.setInputCloud(src_cloud);
-        sor.setMeanK(1000);
-        sor.setStddevMulThresh(1.0);
-        sor.filter(*src_cloud);
+        // Remove outliers from the new cloud to be added
+        // pcl::StatisticalOutlierRemoval<pcl::PointXYZ> sor;
+        // sor.setInputCloud(src_cloud);
+        // sor.setMeanK(1000);
+        // sor.setStddevMulThresh(3);
+        // sor.filter(*src_cloud);
 
         // Align and stitch clouds
         if (i == 0)
@@ -291,7 +293,7 @@ int main (int argc, char** argv)
         }
         else
         {
-            alignClouds(src_cloud, stitched_cloud, 100);
+            alignClouds(src_cloud, stitched_cloud, 30);
             *stitched_cloud += *src_cloud;
         }
     }
@@ -300,7 +302,7 @@ int main (int argc, char** argv)
     pcl::StatisticalOutlierRemoval<pcl::PointXYZ> sor;
     sor.setInputCloud(stitched_cloud);
     sor.setMeanK(1000);
-    sor.setStddevMulThresh(1.0);
+    sor.setStddevMulThresh(0.5);
     sor.filter(*stitched_cloud);
 
     // /*          Downsampling            */
@@ -359,14 +361,15 @@ void alignClouds(pcl::PointCloud<pcl::PointXYZ>::Ptr src_cloud,
 {
     // Use ICP to transform src_cloud to be aligned with stitched_cloud
 
+    std::cout << "Finding normals..." << std::endl;
     // Compute surface normals and curvature
-    pcl::PointCloud<pcl::PointNormal>::Ptr src_normals (new pcl::PointCloud<pcl::PointNormal>);
-    pcl::PointCloud<pcl::PointNormal>::Ptr stitched_normals (new pcl::PointCloud<pcl::PointNormal>);
+    pcl::PointCloud<pcl::Normal>::Ptr src_normals (new pcl::PointCloud<pcl::Normal>);
+    pcl::PointCloud<pcl::Normal>::Ptr stitched_normals (new pcl::PointCloud<pcl::Normal>);
 
-    pcl::NormalEstimation<pcl::PointXYZ, pcl::PointNormal> normal_est;
-    pcl::search::KdTree<pcl::PointXYZ>::Ptr tree (new pcl::search::KdTree<pcl::PointXYZ> ());
+    pcl::NormalEstimation<pcl::PointXYZ, pcl::Normal> normal_est;
+    pcl::search::KdTree<pcl::PointXYZ>::Ptr tree (new pcl::search::KdTree<pcl::PointXYZ>);
     normal_est.setSearchMethod(tree);
-    normal_est.setKSearch(30);
+    normal_est.setKSearch(100);
 
     normal_est.setInputCloud(src_cloud);
     normal_est.compute(*src_normals);
@@ -376,38 +379,73 @@ void alignClouds(pcl::PointCloud<pcl::PointXYZ>::Ptr src_cloud,
     normal_est.compute(*stitched_normals);
     pcl::copyPointCloud(*stitched_cloud, *stitched_normals);
 
+    std::cout << "Done" << std::endl;
+    std::cout << "FPFH..." << std::endl;
+    // Compute a FPFH for SAC initial alignment
+    pcl::PointCloud<pcl::FPFHSignature33>::Ptr src_features (new pcl::PointCloud<pcl::FPFHSignature33>);
+    pcl::PointCloud<pcl::FPFHSignature33>::Ptr stitched_features (new pcl::PointCloud<pcl::FPFHSignature33>);
+    pcl::FPFHEstimation<pcl::PointXYZ, pcl::PointNormal, pcl::FPFHSignature33> fpfh;
+
+    fpfh.setInputCloud(src_cloud);
+    fpfh.setInputNormals(src_normals);
+    fpfh.setSearchMethod(tree);
+    fpfh.setKSearch(100);
+    fpfh.compute(*src_features);
+
+    fpfh.setInputCloud(stitched_cloud);
+    fpfh.setInputNormals(stitched_normals);
+    fpfh.setSearchMethod(tree);
+    fpfh.setKSearch(100);
+    fpfh.compute(*stitched_features);
+
+    std::cout << "Done" << std::endl;
+    std::cout << "SAC_IA..." << std::endl;
+    // Perform an initial alignment with SAC
+    pcl::SampleConsensusInitialAlignment<pcl::PointXYZ, pcl::PointXYZ, pcl::FPFHSignature33> sac_ia;
+
+    sac_ia.setMaxCorrespondenceDistance(1 * point_scale);
+    sac_ia.setMaximumIterations(1000);
+    sac_ia.setInputTarget(stitched_cloud);
+    sac_ia.setTargetFeatures(stitched_features);
+
+    sac_ia.setInputSource(src_cloud);
+    sac_ia.setSourceFeatures(src_features);
+
+    sac_ia.align(*stitched_cloud);
+    std::cout << "Done" << std::endl;
+    std::cout << "ICP..." << std::endl;
     // Weight x,y,z,curvature equally
-    MyPointRepresentation point_representation;
-    float alpha[4] = {1.0, 1.0, 1.0, 1.0};
-    point_representation.setRescaleValues(alpha);
-
-    pcl::IterativeClosestPointNonLinear<pcl::PointNormal, pcl::PointNormal> reg;
-    reg.setTransformationEpsilon(1e-6);
-
-    reg.setMaxCorrespondenceDistance(1 * point_scale);
-    reg.setPointRepresentation(boost::make_shared<const MyPointRepresentation> (point_representation));
-
-    reg.setInputSource(src_normals);
-    reg.setInputTarget(stitched_normals);
-
-    Eigen::Matrix4f Ti = Eigen::Matrix4f::Identity (), prev, stitched_to_src;
-    pcl::PointCloud<pcl::PointNormal>::Ptr reg_result = src_normals;
-    reg.setMaximumIterations(num_iters);
-
-    src_normals = reg_result;
-    reg.setInputSource(src_normals);
-    reg.align(*reg_result);
-
-    Ti *= reg.getFinalTransformation();
-
-    if (fabs ((reg.getLastIncrementalTransformation() - prev).sum()) < reg.getTransformationEpsilon ())
-    {
-        reg.setMaxCorrespondenceDistance(reg.getMaxCorrespondenceDistance() - 0.01 * point_scale);
-    }
-
-    prev = reg.getLastIncrementalTransformation();
-
-    stitched_to_src = Ti.inverse();
-    std::cout << stitched_to_src << std::endl;
-    pcl::transformPointCloud(*stitched_cloud, *stitched_cloud, stitched_to_src);
+    // MyPointRepresentation point_representation;
+    // float alpha[4] = {1.0, 1.0, 1.0, 1.0};
+    // point_representation.setRescaleValues(alpha);
+    //
+    // pcl::IterativeClosestPointNonLinear<pcl::PointNormal, pcl::PointNormal> reg;
+    // reg.setTransformationEpsilon(1e-9);
+    //
+    // reg.setMaxCorrespondenceDistance(0.1 * point_scale);
+    // reg.setPointRepresentation(boost::make_shared<const MyPointRepresentation> (point_representation));
+    //
+    // reg.setInputSource(src_normals);
+    // reg.setInputTarget(stitched_normals);
+    //
+    // Eigen::Matrix4f Ti = Eigen::Matrix4f::Identity (), prev, stitched_to_src;
+    // pcl::PointCloud<pcl::PointNormal>::Ptr reg_result = src_normals;
+    // reg.setMaximumIterations(num_iters);
+    //
+    // src_normals = reg_result;
+    // reg.setInputSource(src_normals);
+    // reg.align(*reg_result);
+    //
+    // Ti *= reg.getFinalTransformation();
+    //
+    // if (fabs ((reg.getLastIncrementalTransformation() - prev).sum()) < reg.getTransformationEpsilon ())
+    // {
+    //     reg.setMaxCorrespondenceDistance(reg.getMaxCorrespondenceDistance() - 0.01 * point_scale);
+    // }
+    //
+    // prev = reg.getLastIncrementalTransformation();
+    //
+    // stitched_to_src = Ti.inverse();
+    // pcl::transformPointCloud(*stitched_cloud, *stitched_cloud, stitched_to_src);
+    // std::cout << "Done" << std::endl;
 }
