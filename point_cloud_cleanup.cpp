@@ -26,18 +26,21 @@
 #include <pcl/registration/icp_nl.h>
 #include <pcl/registration/transforms.h>
 #include <pcl/registration/ia_ransac.h>
-#include <pcl/features/fpfh.h>
+#include <pcl/features/pfh.h>
+#include <pcl/surface/mls.h>
 
 #include <boost/make_shared.hpp>
 
 namespace fs = boost::filesystem;
 
+typedef pcl::PointXYZRGB PointT;
+
 std::vector<std::string> getFileList(const std::string& path);
 static bool filePredicate(const std::string &s);
-void transformCloud(pcl::PointCloud<pcl::PointXYZ>::Ptr src_cloud, double rot_x, double rot_y, double rot_z,
+void transformCloud(pcl::PointCloud<PointT>::Ptr src_cloud, double rot_x, double rot_y, double rot_z,
                         double trans_x, double trans_y, double trans_z);
-void alignClouds(pcl::PointCloud<pcl::PointXYZ>::Ptr src_cloud,
-                 pcl::PointCloud<pcl::PointXYZ>::Ptr stitched_cloud, int num_iters);
+void alignClouds(pcl::PointCloud<PointT>::Ptr src_cloud,
+                 pcl::PointCloud<PointT>::Ptr stitched_cloud, int num_iters);
 
 // TODO: Reduce the scope of these global variables
 const int point_scale = 1000;
@@ -246,41 +249,40 @@ int main (int argc, char** argv)
     //     t->join();
     // }
     /*          Processing          */
-    pcl::PointCloud<pcl::PointXYZ>::Ptr stitched_cloud (new pcl::PointCloud<pcl::PointXYZ> ());
+    pcl::PointCloud<PointT>::Ptr stitched_cloud (new pcl::PointCloud<PointT> ());
     for (int i = 0; i < files_to_process.size(); ++i)
     {
         std::cout << int(100 * (i+1) / files_to_process.size()) << "%" << std::endl;
 
         // Read in a new point cloud
-        pcl::PointCloud<pcl::PointXYZ>::Ptr src_cloud (new pcl::PointCloud<pcl::PointXYZ> ());
+        pcl::PointCloud<PointT>::Ptr src_cloud (new pcl::PointCloud<PointT> ());
         std::string path = directory + files_to_process[i];
         pcl::PCDReader reader;
         reader.read(path, *src_cloud);
 
         // Find extrema
-        pcl::PointXYZ min_pt, max_pt;
+        PointT min_pt, max_pt;
         pcl::getMinMax3D(*src_cloud, min_pt, max_pt);
 
         // Shift the origin to the start of the tunnel
         transformCloud(src_cloud, 0, 0, 0, 0, 0, -min_pt.z);
 
-        // Only use the first 10m of points
-        pcl::PassThrough<pcl::PointXYZ> pass;
+        pcl::PassThrough<PointT> pass;
         pass.setInputCloud(src_cloud);
         pass.setFilterFieldName("z");
-        pass.setFilterLimits(0, 5 * point_scale);
+        pass.setFilterLimits(0.5, 5 * point_scale);
         pass.filter(*src_cloud);
 
         // Downsample both clouds
-        pcl::VoxelGrid<pcl::PointXYZ> grid;
-        grid.setLeafSize(0.1*point_scale, 0.1*point_scale, 0.1*point_scale);
+        pcl::VoxelGrid<PointT> grid;
+        grid.setLeafSize(0.01*point_scale, 0.01*point_scale, 0.01*point_scale);
         grid.setInputCloud(src_cloud);
         grid.filter(*src_cloud);
         grid.setInputCloud(stitched_cloud);
         grid.filter(*stitched_cloud);
 
         // Remove outliers from the new cloud to be added
-        // pcl::StatisticalOutlierRemoval<pcl::PointXYZ> sor;
+        // pcl::StatisticalOutlierRemoval<PointT> sor;
         // sor.setInputCloud(src_cloud);
         // sor.setMeanK(1000);
         // sor.setStddevMulThresh(3);
@@ -293,31 +295,36 @@ int main (int argc, char** argv)
         }
         else
         {
-            alignClouds(src_cloud, stitched_cloud, 30);
+            alignClouds(src_cloud, stitched_cloud, 100);
             *stitched_cloud += *src_cloud;
         }
     }
 
     // Remove outliers from final result
-    pcl::StatisticalOutlierRemoval<pcl::PointXYZ> sor;
+    pcl::StatisticalOutlierRemoval<PointT> sor;
     sor.setInputCloud(stitched_cloud);
     sor.setMeanK(1000);
     sor.setStddevMulThresh(0.5);
     sor.filter(*stitched_cloud);
 
-    // /*          Downsampling            */
-    // std::cout << "Downsampling stitched point cloud." << std::endl;
+    // Reconstruct the surface
+    // pcl::PointCloud<pcl::PointNormal> mls_points;
+    // pcl::search::KdTree<PointT>::Ptr tree (new pcl::search::KdTree<PointT>);
+    // pcl::MovingLeastSquares<PointT, pcl::PointNormal> mls;
+    // mls.setComputeNormals(true);
+    // mls.setInputCloud(stitched_cloud);
+    // mls.setPolynomialFit(true);
+    // mls.setSearchMethod(tree);
+    // mls.setSearchRadius(0.03 * point_scale);
+    // mls.process(mls_points);
+
     pcl::PCLPointCloud2::Ptr stitched_cloud_2 (new pcl::PCLPointCloud2());
-    // // PointCloud -> PCLPointCloud2
     pcl::toPCLPointCloud2(*stitched_cloud, *stitched_cloud_2);
-    // pcl::VoxelGrid<pcl::PCLPointCloud2> vox_grid;
-    // vox_grid.setInputCloud(stitched_cloud_2);
-    // vox_grid.setLeafSize(0.01 * point_scale, 0.01 * point_scale, 0.01 * point_scale); // 10mm voxel size
-    // vox_grid.filter(*stitched_cloud_2);
 
     std::string filename = directory + "/filtered.pcd";
     pcl::PCDWriter writer;
     writer.write(filename, *stitched_cloud_2, Eigen::Vector4f::Zero (), Eigen::Quaternionf::Identity (), false);
+    // pcl::io::savePCDFile (filename, mls_points);
     return 0;
 }
 
@@ -345,7 +352,7 @@ static bool filePredicate(const std::string &s)
 }
 
 /*          Transformations            */
-void transformCloud(pcl::PointCloud<pcl::PointXYZ>::Ptr src_cloud, double rot_x, double rot_y, double rot_z,
+void transformCloud(pcl::PointCloud<PointT>::Ptr src_cloud, double rot_x, double rot_y, double rot_z,
                         double trans_x, double trans_y, double trans_z)
 {
     Eigen::Affine3f transform = Eigen::Affine3f::Identity();
@@ -356,20 +363,22 @@ void transformCloud(pcl::PointCloud<pcl::PointXYZ>::Ptr src_cloud, double rot_x,
     pcl::transformPointCloud(*src_cloud, *src_cloud, transform);
 }
 
-void alignClouds(pcl::PointCloud<pcl::PointXYZ>::Ptr src_cloud,
-                 pcl::PointCloud<pcl::PointXYZ>::Ptr stitched_cloud, int num_iters)
+void alignClouds(pcl::PointCloud<PointT>::Ptr src_cloud,
+                 pcl::PointCloud<PointT>::Ptr stitched_cloud, int num_iters)
 {
     // Use ICP to transform src_cloud to be aligned with stitched_cloud
 
     std::cout << "Finding normals..." << std::endl;
     // Compute surface normals and curvature
-    pcl::PointCloud<pcl::Normal>::Ptr src_normals (new pcl::PointCloud<pcl::Normal>);
-    pcl::PointCloud<pcl::Normal>::Ptr stitched_normals (new pcl::PointCloud<pcl::Normal>);
+    pcl::PointCloud<pcl::PointNormal>::Ptr src_normals (new pcl::PointCloud<pcl::PointNormal>);
+    pcl::PointCloud<pcl::PointNormal>::Ptr stitched_normals (new pcl::PointCloud<pcl::PointNormal>);
+    pcl::search::KdTree<PointT>::Ptr tree (new pcl::search::KdTree<PointT>);
 
-    pcl::NormalEstimation<pcl::PointXYZ, pcl::Normal> normal_est;
-    pcl::search::KdTree<pcl::PointXYZ>::Ptr tree (new pcl::search::KdTree<pcl::PointXYZ>);
+    pcl::NormalEstimation<PointT, pcl::PointNormal> normal_est;
+
     normal_est.setSearchMethod(tree);
     normal_est.setKSearch(100);
+    // normal_est.setRadiusSearch(0.03 * 1000);
 
     normal_est.setInputCloud(src_cloud);
     normal_est.compute(*src_normals);
@@ -380,72 +389,75 @@ void alignClouds(pcl::PointCloud<pcl::PointXYZ>::Ptr src_cloud,
     pcl::copyPointCloud(*stitched_cloud, *stitched_normals);
 
     std::cout << "Done" << std::endl;
-    std::cout << "FPFH..." << std::endl;
-    // Compute a FPFH for SAC initial alignment
-    pcl::PointCloud<pcl::FPFHSignature33>::Ptr src_features (new pcl::PointCloud<pcl::FPFHSignature33>);
-    pcl::PointCloud<pcl::FPFHSignature33>::Ptr stitched_features (new pcl::PointCloud<pcl::FPFHSignature33>);
-    pcl::FPFHEstimation<pcl::PointXYZ, pcl::PointNormal, pcl::FPFHSignature33> fpfh;
-
-    fpfh.setInputCloud(src_cloud);
-    fpfh.setInputNormals(src_normals);
-    fpfh.setSearchMethod(tree);
-    fpfh.setKSearch(100);
-    fpfh.compute(*src_features);
-
-    fpfh.setInputCloud(stitched_cloud);
-    fpfh.setInputNormals(stitched_normals);
-    fpfh.setSearchMethod(tree);
-    fpfh.setKSearch(100);
-    fpfh.compute(*stitched_features);
-
-    std::cout << "Done" << std::endl;
-    std::cout << "SAC_IA..." << std::endl;
-    // Perform an initial alignment with SAC
-    pcl::SampleConsensusInitialAlignment<pcl::PointXYZ, pcl::PointXYZ, pcl::FPFHSignature33> sac_ia;
-
-    sac_ia.setMaxCorrespondenceDistance(1 * point_scale);
-    sac_ia.setMaximumIterations(1000);
-    sac_ia.setInputTarget(stitched_cloud);
-    sac_ia.setTargetFeatures(stitched_features);
-
-    sac_ia.setInputSource(src_cloud);
-    sac_ia.setSourceFeatures(src_features);
-
-    sac_ia.align(*stitched_cloud);
-    std::cout << "Done" << std::endl;
+    // std::cout << "FPFH..." << std::endl;
+    // // Compute a FPFH for SAC initial alignment
+    //
+    // pcl::PointCloud<pcl::PFHSignature125>::Ptr src_features (new pcl::PointCloud<pcl::PFHSignature125>);
+    // pcl::PointCloud<pcl::PFHSignature125>::Ptr stitched_features (new pcl::PointCloud<pcl::PFHSignature125>);
+    // pcl::PFHEstimation<pcl::PointNormal, pcl::PointNormal, pcl::PFHSignature125> pfh;
+    // pcl::search::KdTree<pcl::PointNormal>::Ptr tree2 (new pcl::search::KdTree<pcl::PointNormal>);
+    //
+    // pfh.setInputNormals(src_normals);
+    // pfh.setSearchMethod(tree2);
+    // pfh.setKSearch(1000);
+    // pfh.compute(*src_features);
+    //
+    // std::cout << *src_normals << std::endl;
+    // std::cout << *src_features << std::endl;
+    //
+    // pfh.setInputNormals(stitched_normals);
+    // pfh.setSearchMethod(tree2);
+    // pfh.setKSearch(1000);
+    // pfh.compute(*stitched_features);
+    //
+    // std::cout << "Done" << std::endl;
+    // std::cout << "SAC_IA..." << std::endl;
+    // // Perform an initial alignment with SAC
+    // pcl::SampleConsensusInitialAlignment<PointT, PointT, pcl::FPFHSignature33> sac_ia;
+    //
+    // sac_ia.setMaxCorrespondenceDistance(1 * point_scale);
+    // sac_ia.setMaximumIterations(1000);
+    // sac_ia.setInputTarget(stitched_cloud);
+    // sac_ia.setTargetFeatures(stitched_features);
+    //
+    // sac_ia.setInputSource(src_cloud);
+    // sac_ia.setSourceFeatures(src_features);
+    //
+    // sac_ia.align(*stitched_cloud);
+    // std::cout << "Done" << std::endl;
     std::cout << "ICP..." << std::endl;
     // Weight x,y,z,curvature equally
-    // MyPointRepresentation point_representation;
-    // float alpha[4] = {1.0, 1.0, 1.0, 1.0};
-    // point_representation.setRescaleValues(alpha);
-    //
-    // pcl::IterativeClosestPointNonLinear<pcl::PointNormal, pcl::PointNormal> reg;
-    // reg.setTransformationEpsilon(1e-9);
-    //
-    // reg.setMaxCorrespondenceDistance(0.1 * point_scale);
-    // reg.setPointRepresentation(boost::make_shared<const MyPointRepresentation> (point_representation));
-    //
-    // reg.setInputSource(src_normals);
-    // reg.setInputTarget(stitched_normals);
-    //
-    // Eigen::Matrix4f Ti = Eigen::Matrix4f::Identity (), prev, stitched_to_src;
-    // pcl::PointCloud<pcl::PointNormal>::Ptr reg_result = src_normals;
-    // reg.setMaximumIterations(num_iters);
-    //
-    // src_normals = reg_result;
-    // reg.setInputSource(src_normals);
-    // reg.align(*reg_result);
-    //
-    // Ti *= reg.getFinalTransformation();
-    //
-    // if (fabs ((reg.getLastIncrementalTransformation() - prev).sum()) < reg.getTransformationEpsilon ())
-    // {
-    //     reg.setMaxCorrespondenceDistance(reg.getMaxCorrespondenceDistance() - 0.01 * point_scale);
-    // }
-    //
-    // prev = reg.getLastIncrementalTransformation();
-    //
-    // stitched_to_src = Ti.inverse();
-    // pcl::transformPointCloud(*stitched_cloud, *stitched_cloud, stitched_to_src);
-    // std::cout << "Done" << std::endl;
+    MyPointRepresentation point_representation;
+    float alpha[4] = {1.0, 1.0, 1.0, 1.0};
+    point_representation.setRescaleValues(alpha);
+
+    pcl::IterativeClosestPointNonLinear<pcl::PointNormal, pcl::PointNormal> reg;
+    reg.setTransformationEpsilon(1e-9);
+
+    reg.setMaxCorrespondenceDistance(10 * point_scale);
+    reg.setPointRepresentation(boost::make_shared<const MyPointRepresentation> (point_representation));
+
+    reg.setInputSource(src_normals);
+    reg.setInputTarget(stitched_normals);
+
+    Eigen::Matrix4f Ti = Eigen::Matrix4f::Identity (), prev, stitched_to_src;
+    pcl::PointCloud<pcl::PointNormal>::Ptr reg_result = src_normals;
+    reg.setMaximumIterations(num_iters);
+
+    src_normals = reg_result;
+    reg.setInputSource(src_normals);
+    reg.align(*reg_result);
+
+    Ti *= reg.getFinalTransformation();
+
+    if (fabs ((reg.getLastIncrementalTransformation() - prev).sum()) < reg.getTransformationEpsilon ())
+    {
+        reg.setMaxCorrespondenceDistance(reg.getMaxCorrespondenceDistance() - 0.01 * point_scale);
+    }
+
+    prev = reg.getLastIncrementalTransformation();
+
+    stitched_to_src = Ti.inverse();
+    pcl::transformPointCloud(*stitched_cloud, *stitched_cloud, stitched_to_src);
+    std::cout << "Done" << std::endl;
 }
