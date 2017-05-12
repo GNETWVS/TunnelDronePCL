@@ -11,5 +11,5 @@ link_directories(${PCL_LIBRARY_DIRS})
 add_definitions(${PCL_DEFINITIONS})
 
 add_executable (cleanup_pcd point_cloud_cleanup.cpp)
-#target_link_libraries (cleanup_pcd ${PCL_LIBRARIES})
-target_link_libraries (cleanup_pcd ~/usr/local/lib/)
+target_link_libraries (cleanup_pcd ${PCL_LIBRARIES})
+#target_link_libraries (cleanup_pcd ~/usr/local/lib/)

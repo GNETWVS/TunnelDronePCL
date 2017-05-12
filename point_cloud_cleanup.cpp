@@ -139,7 +139,7 @@ int main (int argc, char** argv)
         const int rows_to_skip = 2;
         const int cols_to_skip = 2;
         int row = -1;
-        while (std::getline(infile, line))
+        while (std::getline(infile, line, ';'))
         {
             // Skip header rows
             if (rows_to_skip > ++row)
@@ -266,6 +266,14 @@ int main (int argc, char** argv)
 
         // Shift the origin to the start of the tunnel
         transformCloud(src_cloud, 0, 0, 0, 0, 0, -min_pt.z);
+        if (transformations_file_supplied)
+        {
+            std::cout << "Transforming..." << std::endl;
+            // NB: Only translating longitudinally for now
+            transformCloud(src_cloud, -translation_and_rotation[i][0], -translation_and_rotation[i][1],
+                -translation_and_rotation[i][2], 0, 0,
+                translation_and_rotation[i][5]);
+        }
 
         pcl::PassThrough<PointT> pass;
         pass.setInputCloud(src_cloud);
@@ -275,7 +283,7 @@ int main (int argc, char** argv)
 
         // Downsample both clouds
         pcl::VoxelGrid<PointT> grid;
-        grid.setLeafSize(0.01*point_scale, 0.01*point_scale, 0.01*point_scale);
+        grid.setLeafSize(0.1*point_scale, 0.1*point_scale, 0.1*point_scale);
         grid.setInputCloud(src_cloud);
         grid.filter(*src_cloud);
         grid.setInputCloud(stitched_cloud);
@@ -434,7 +442,7 @@ void alignClouds(pcl::PointCloud<PointT>::Ptr src_cloud,
     pcl::IterativeClosestPointNonLinear<pcl::PointNormal, pcl::PointNormal> reg;
     reg.setTransformationEpsilon(1e-9);
 
-    reg.setMaxCorrespondenceDistance(10 * point_scale);
+    reg.setMaxCorrespondenceDistance(0.5 * point_scale);
     reg.setPointRepresentation(boost::make_shared<const MyPointRepresentation> (point_representation));
 
     reg.setInputSource(src_normals);
