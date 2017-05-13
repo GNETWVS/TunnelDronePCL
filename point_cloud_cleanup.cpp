@@ -30,6 +30,8 @@
 #include <pcl/surface/mls.h>
 
 #include <boost/make_shared.hpp>
+#include <boost/date_time/posix_time/posix_time.hpp>
+#include <boost/progress.hpp>
 
 namespace fs = boost::filesystem;
 
@@ -136,10 +138,10 @@ int main (int argc, char** argv)
         std::cout << "Using position information supplied by " << argv[4] << "." << std::endl;
         std::string line;
         std::ifstream infile(argv[4]);
-        const int rows_to_skip = 2;
-        const int cols_to_skip = 2;
+        const int rows_to_skip = 1;
+        const int cols_to_skip = 1;
         int row = -1;
-        while (std::getline(infile, line, ';'))
+        while (std::getline(infile, line))
         {
             // Skip header rows
             if (rows_to_skip > ++row)
@@ -150,15 +152,15 @@ int main (int argc, char** argv)
             translation_and_rotation_raw.push_back({});
 
             std::istringstream iss (line);
-            double val = 0.0;
+            std::string val = "0.0";
             int col = 0;
-            while (iss >> val)
+            while (std::getline(iss, val, ';'))
             {
                 if (cols_to_skip > col++)
                 {
                     continue;
                 }
-                translation_and_rotation_raw[row - rows_to_skip].push_back(val);
+                translation_and_rotation_raw[row - rows_to_skip].push_back(stod(val));
             }
         }
     }
@@ -199,13 +201,13 @@ int main (int argc, char** argv)
         // Find the average translation and rotation value for each axis
         for (int row = 0; row < translation_and_rotation_raw.size(); ++row)
         {
+            int new_row = row / num_rows_per_file;
             if (row % num_rows_per_file == 0)
             {
                 translation_and_rotation.push_back({0.0, 0.0, 0.0, 0.0, 0.0, 0.0});
             }
             for (int col = 0; col < num_cols; ++col)
             {
-                int new_row = row / (translation_and_rotation_raw.size() / num_rows_per_file);
                 translation_and_rotation[new_row][col] += translation_and_rotation_raw[row][col];
             }
         }
@@ -249,10 +251,19 @@ int main (int argc, char** argv)
     //     t->join();
     // }
     /*          Processing          */
+    int total_progress_steps = files_to_process.size() * 1;
+    boost::progress_display show_progress(total_progress_steps);
+    int num_progress_steps = 0;
+    boost::posix_time::time_duration average_delay = boost::posix_time::time_duration(0,0,0,0);
     pcl::PointCloud<PointT>::Ptr stitched_cloud (new pcl::PointCloud<PointT> ());
+
     for (int i = 0; i < files_to_process.size(); ++i)
     {
-        std::cout << int(100 * (i+1) / files_to_process.size()) << "%" << std::endl;
+        // Track the average time taken to process a cloud
+        boost::posix_time::ptime start_time = boost::posix_time::microsec_clock::local_time();
+
+        ++show_progress;
+        ++num_progress_steps;
 
         // Read in a new point cloud
         pcl::PointCloud<PointT>::Ptr src_cloud (new pcl::PointCloud<PointT> ());
@@ -266,23 +277,28 @@ int main (int argc, char** argv)
 
         // Shift the origin to the start of the tunnel
         transformCloud(src_cloud, 0, 0, 0, 0, 0, -min_pt.z);
-        if (transformations_file_supplied)
-        {
-            std::cout << "Transforming..." << std::endl;
-            // NB: Only translating longitudinally for now
-            transformCloud(src_cloud, -translation_and_rotation[i][0], -translation_and_rotation[i][1],
-                -translation_and_rotation[i][2], 0, 0,
-                translation_and_rotation[i][5]);
-        }
-
+        // Try to remove the majority of the noise quickly
         pcl::PassThrough<PointT> pass;
         pass.setInputCloud(src_cloud);
         pass.setFilterFieldName("z");
         pass.setFilterLimits(0.5, 5 * point_scale);
         pass.filter(*src_cloud);
 
+        // If we know the approximate pose of the point cloud, transform to it
+        if (transformations_file_supplied)
+        {
+            transformCloud(src_cloud,
+                -translation_and_rotation[i][0],    // rot_x
+                -translation_and_rotation[i][1],    // rot_y
+                -translation_and_rotation[i][2],    // rot_z
+                translation_and_rotation[i][3],     // dx
+                translation_and_rotation[i][4],     // dy
+                translation_and_rotation[i][5]);    // dz
+        }
+
         // Downsample both clouds
         pcl::VoxelGrid<PointT> grid;
+        // Smaller leaf sizes makes the cloud more accurate but also signficantly slower
         grid.setLeafSize(0.1*point_scale, 0.1*point_scale, 0.1*point_scale);
         grid.setInputCloud(src_cloud);
         grid.filter(*src_cloud);
@@ -305,6 +321,22 @@ int main (int argc, char** argv)
         {
             alignClouds(src_cloud, stitched_cloud, 100);
             *stitched_cloud += *src_cloud;
+        }
+
+        // Update the average delay and display the estimated time
+        boost::posix_time::ptime end_time = boost::posix_time::microsec_clock::local_time();
+        boost::posix_time::time_duration delay = end_time - start_time;
+        average_delay *= i;
+        average_delay += delay;
+        average_delay /= i + 1;
+        if (i % 10 == 0 && i != 0)
+        {
+            std::string est_time = boost::posix_time::to_simple_string(average_delay * (int(files_to_process.size()) - i));
+            std::cout << "\nEstimated time until completion: "
+                      <<  est_time.substr(0,8)
+                      << std::endl;
+            boost::progress_display show_progress(total_progress_steps);
+            show_progress += num_progress_steps;
         }
     }
 
@@ -376,7 +408,7 @@ void alignClouds(pcl::PointCloud<PointT>::Ptr src_cloud,
 {
     // Use ICP to transform src_cloud to be aligned with stitched_cloud
 
-    std::cout << "Finding normals..." << std::endl;
+    // std::cout << "Finding normals..." << std::endl;
     // Compute surface normals and curvature
     pcl::PointCloud<pcl::PointNormal>::Ptr src_normals (new pcl::PointCloud<pcl::PointNormal>);
     pcl::PointCloud<pcl::PointNormal>::Ptr stitched_normals (new pcl::PointCloud<pcl::PointNormal>);
@@ -396,7 +428,7 @@ void alignClouds(pcl::PointCloud<PointT>::Ptr src_cloud,
     normal_est.compute(*stitched_normals);
     pcl::copyPointCloud(*stitched_cloud, *stitched_normals);
 
-    std::cout << "Done" << std::endl;
+    // std::cout << "Done" << std::endl;
     // std::cout << "FPFH..." << std::endl;
     // // Compute a FPFH for SAC initial alignment
     //
@@ -433,7 +465,7 @@ void alignClouds(pcl::PointCloud<PointT>::Ptr src_cloud,
     //
     // sac_ia.align(*stitched_cloud);
     // std::cout << "Done" << std::endl;
-    std::cout << "ICP..." << std::endl;
+    // std::cout << "ICP..." << std::endl;
     // Weight x,y,z,curvature equally
     MyPointRepresentation point_representation;
     float alpha[4] = {1.0, 1.0, 1.0, 1.0};
@@ -467,5 +499,5 @@ void alignClouds(pcl::PointCloud<PointT>::Ptr src_cloud,
 
     stitched_to_src = Ti.inverse();
     pcl::transformPointCloud(*stitched_cloud, *stitched_cloud, stitched_to_src);
-    std::cout << "Done" << std::endl;
+    // std::cout << "Done" << std::endl;
 }
