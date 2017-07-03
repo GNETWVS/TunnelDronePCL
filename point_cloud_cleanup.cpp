@@ -177,7 +177,7 @@ int main (int argc, char** argv)
     // Sort files_to_process into ascending order
     struct compareFileNamesStruct
     {
-        bool operator() (std::string &a, std::string &b)
+        bool operator() (std::string a, std::string b)
         {
             size_t a_idx_start = a.find_last_of("D") + 1;
             size_t a_idx_end = a.find(".");
