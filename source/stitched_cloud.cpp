@@ -55,33 +55,44 @@ void StitchedCloud::registerWithSAC(PointCloudT::Ptr cloud, const int iters)
     // Useful for fast but rough registration
 
     // Estimate normals in the cloud
+    pcl::console::print_highlight("Normals\n");
     pcl::PointCloud<pcl::Normal>::Ptr src_normals (new pcl::PointCloud<pcl::Normal> ());
     pcl::PointCloud<pcl::Normal>::Ptr stitched_normals (new pcl::PointCloud<pcl::Normal> ());
     pcl::NormalEstimation<PointT, pcl::Normal> normal_est;
     pcl::search::KdTree<PointT>::Ptr tree (new pcl::search::KdTree<PointT>);
-    normal_est.setSearchMethod(tree);
-    normal_est.setKSearch(100);
     normal_est.setInputCloud(cloud);
+    normal_est.setSearchMethod(tree);
+    normal_est.setRadiusSearch(30);
+    // normal_est.setKSearch(100);
     normal_est.compute(*src_normals);
+
     normal_est.setInputCloud(stitched_cloud);
+    normal_est.setSearchMethod(tree);
+    normal_est.setRadiusSearch(30);
     normal_est.compute(*stitched_normals);
 
     // TODO: Figure out why line 79 seg-faults
 
     // Locate features using the normals and clouds
+    pcl::console::print_highlight("Fast point feature histogram\n");
     pcl::FPFHEstimation<PointT, pcl::Normal, pcl::FPFHSignature33> fpfh;
     pcl::PointCloud<pcl::FPFHSignature33>::Ptr src_features (new pcl::PointCloud<pcl::FPFHSignature33> ());
     pcl::PointCloud<pcl::FPFHSignature33>::Ptr stitched_features (new pcl::PointCloud<pcl::FPFHSignature33> ());
-    fpfh.setSearchMethod(tree);
-    fpfh.setKSearch(250);       // must be larger than value for normals
     fpfh.setInputCloud(cloud);
     fpfh.setInputNormals(src_normals);
+    fpfh.setSearchMethod(tree);
+    fpfh.setRadiusSearch(1000);
+    // fpfh.setKSearch(250);       // must be larger than value for normals
     fpfh.compute(*src_features);
+
     fpfh.setInputCloud(stitched_cloud);
     fpfh.setInputNormals(stitched_normals);
+    fpfh.setSearchMethod(tree);
+    fpfh.setRadiusSearch(1000);
     fpfh.compute(*stitched_features);
 
     // Use the features found to perform the alignment
+    pcl::console::print_highlight("Sample consensus initial alignment\n");
     pcl::SampleConsensusInitialAlignment<PointT, PointT, pcl::FPFHSignature33> sac_ia;
     sac_ia.setMaximumIterations(iters);
     // Stitched
