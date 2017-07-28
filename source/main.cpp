@@ -1,28 +1,9 @@
 #include <stdexcept>
 #include <iostream>
 
-#include <pcl/common/common.h>
-#include <pcl/conversions.h>
-#include <pcl/io/pcd_io.h>
-#include <pcl/point_types.h>
-#include <pcl/point_representation.h>
-#include <pcl/filters/statistical_outlier_removal.h>
-#include <pcl/point_cloud.h>
-#include <pcl/filters/passthrough.h>
-#include <pcl/kdtree/kdtree_flann.h>
-#include <pcl/filters/voxel_grid.h>
-#include <pcl/common/transforms.h>
-#include <pcl/features/normal_3d.h>
-#include <pcl/registration/icp.h>
-#include <pcl/registration/icp_nl.h>
-#include <pcl/registration/transforms.h>
-#include <pcl/registration/ia_ransac.h>
-#include <pcl/features/pfh.h>
-#include <pcl/surface/mls.h>
-
 #include "stitched_cloud.h"
 
-typedef pcl::PointXYZRGB PointT;
+typedef pcl::PointXYZ PointT;
 typedef pcl::PointCloud<PointT> PointCloudT;
 
 void helpMessage();
@@ -143,13 +124,17 @@ int main(int argc, char** argv)
     for (int i = 1; i < files_to_process.size(); ++i)
     {
         path = directory + files_to_process[i];
-        std::cout << "Reading: " << path << std::endl;
+        std::cout << "Reading: " << files_to_process[i] << std::endl;
         reader.read(path, *new_cloud);
-
+        // Remove any NaNs to improve speed
+        std::vector<int> tmp;
+        pcl::removeNaNFromPointCloud(*new_cloud, *new_cloud, tmp);
+        // Add this cloud to the stitched cloud 
         stitchedCloud.addCloud(new_cloud, cloud_transformations[i]);
     }
 
     // Write the resulting point cloud
+    pcl::io::savePCDFileASCII(directory + "filtered.pcd", *(stitchedCloud.stitched_cloud));
 
 
     return 1;

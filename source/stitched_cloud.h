@@ -12,15 +12,15 @@
 #include <pcl/kdtree/kdtree_flann.h>
 #include <pcl/filters/voxel_grid.h>
 #include <pcl/common/transforms.h>
-#include <pcl/features/normal_3d.h>
+#include <pcl/features/normal_3d_omp.h>
 #include <pcl/registration/icp.h>
-#include <pcl/registration/icp_nl.h>
 #include <pcl/registration/transforms.h>
 #include <pcl/registration/ia_ransac.h>
-#include <pcl/features/pfh.h>
 #include <pcl/surface/mls.h>
+#include <pcl/registration/ndt.h>
+#include <pcl/features/fpfh_omp.h>
 
-typedef pcl::PointXYZRGB PointT;
+typedef pcl::PointXYZ PointT;
 typedef pcl::PointCloud<PointT> PointCloudT;
 
 /*          Ways to improve registration        */
