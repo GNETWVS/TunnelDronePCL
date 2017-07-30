@@ -53,8 +53,7 @@ int main(int argc, char** argv)
         directory = argv[2];
         if (directory.back() != '/')
         {
-            helpMessage();
-            return -1;
+            directory += "/";
         }
         getFileList(directory, files_to_process);
     }
@@ -72,11 +71,7 @@ int main(int argc, char** argv)
         std::ifstream infile(argv[4]);
         char delim = ';';
         try { getTransformationData(infile, cloud_transformations, delim); } catch (std::exception& e) { e.what(); }
-        averageTransformationData(cloud_transformations, cloud_transformations.size() / files_to_process.size());
-        for (auto& t : cloud_transformations)
-        {
-            std::cout << t.dx << "\n";
-        }
+        averageTransformationData(cloud_transformations, 10); // Assuming 10 rows per cloud
     }
     else
     {
@@ -138,12 +133,17 @@ int main(int argc, char** argv)
         std::vector<int> tmp;
         pcl::removeNaNFromPointCloud(*new_cloud, *new_cloud, tmp);
         // Add this cloud to the stitched cloud
-        stitchedCloud.addCloud(new_cloud, cloud_transformations[i]);
+        stitchedCloud.addCloud(new_cloud, cloud_transformations[i] - cloud_transformations[0]);
         ++progress_bar;
     }
 
+    // Reconstruct the surface
+    pcl::PointCloud<pcl::PointNormal>::Ptr mls_points (new pcl::PointCloud<pcl::PointNormal>());
+    reconstructSurface(mls_points, stitchedCloud.stitched_cloud, 500);
+
     // Write the resulting point cloud
-    pcl::io::savePCDFile(directory + "/filtered.pcd", *(stitchedCloud.stitched_cloud));
+    // pcl::io::savePCDFile(directory + "/filtered.pcd", *(stitchedCloud.stitched_cloud));
+    pcl::io::savePCDFile(directory + "/filtered.pcd", *mls_points);
 
 
     // NB TEMP
@@ -198,12 +198,12 @@ void getTransformationData(std::ifstream& infile, std::vector<TransformData>& tr
         TransformData t_data;
         if (transformVec.size() < 6)
             throw std::domain_error("Input transformations file has fewer than 6 columns.");
-        t_data.dx = transformVec[0];
-        t_data.dy = transformVec[1];
-        t_data.dz = transformVec[2];
-        t_data.rotx = transformVec[3];
-        t_data.roty = transformVec[4];
-        t_data.rotz = transformVec[5];
+        t_data.rotx = transformVec[0];
+        t_data.roty = transformVec[1];
+        t_data.rotz = transformVec[2];
+        t_data.dx = transformVec[3];
+        t_data.dy = transformVec[4];
+        t_data.dz = transformVec[5];
         if (transformVec.size() > 6)
             t_data.confidence = transformVec[6];
         else

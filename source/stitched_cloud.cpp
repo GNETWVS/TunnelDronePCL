@@ -3,8 +3,8 @@
 StitchedCloud::StitchedCloud(PointCloudT::Ptr point_cloud)
 {
     stitched_cloud = point_cloud;
-    downSample(stitched_cloud, 200);
-    removeOutliers(stitched_cloud, 100, 1);
+    downSample(stitched_cloud, 500);
+    removeOutliers(stitched_cloud, 500, 1);
     filterRangeZ(stitched_cloud, 0, 10000);
 }
 
@@ -13,17 +13,16 @@ void StitchedCloud::addCloud(PointCloudT::Ptr new_cloud, const TransformData& tr
     // Uses given transformation data to improve the speed of registration
 
     /*          Pre-Processing          */
-    downSample(new_cloud, 200);
-    removeOutliers(new_cloud, 100, 1);
+    downSample(new_cloud, 500);
+    removeOutliers(new_cloud, 500, 2);
     transform(new_cloud, transformation);
-    filterRangeZ(new_cloud, 0, 10000);
+    filterRangeZ(new_cloud, transformation.dz, 10000+transformation.dz);
     /*          Registration            */
-    registerWithSAC(new_cloud, 20);
-    registerWithICP(new_cloud, 20);
+    // registerWithSAC(new_cloud, 2);
+    registerWithICP(new_cloud, 100);
     *stitched_cloud += *new_cloud;
     /*          Post-Processing         */
-    downSample(stitched_cloud, 200);
-    removeOutliers(new_cloud, 100, 1);
+    removeOutliers(stitched_cloud, 50, 2);
 }
 
 void StitchedCloud::registerWithICP(PointCloudT::Ptr cloud, const int iters)
@@ -36,6 +35,11 @@ void StitchedCloud::registerWithICP(PointCloudT::Ptr cloud, const int iters)
     icp.setInputTarget(stitched_cloud);
     PointCloudT::Ptr registered_cloud (new PointCloudT());
     icp.align(*cloud);
+
+    // Revert the translation in the z axis
+    TransformData t;
+    t.dz = -icp.getFinalTransformation()(2,3);
+    transform(cloud, t);
 }
 
 void StitchedCloud::registerWithSAC(PointCloudT::Ptr cloud, const int iters)
@@ -118,4 +122,16 @@ void filterRangeZ(PointCloudT::Ptr cloud, const double minZ, const double maxZ)
     pass.setFilterFieldName("z");
     pass.setFilterLimits(minZ, maxZ);
     pass.filter(*cloud);
+}
+
+void reconstructSurface(pcl::PointCloud<pcl::PointNormal>::Ptr mls_points, const PointCloudT::Ptr cloud, const double radius)
+{
+    pcl::search::KdTree<PointT>::Ptr tree (new pcl::search::KdTree<PointT>);
+    pcl::MovingLeastSquares<PointT, pcl::PointNormal> mls;
+    mls.setComputeNormals(true);
+    mls.setInputCloud(cloud);
+    mls.setPolynomialFit(true);
+    mls.setSearchMethod(tree);
+    mls.setSearchRadius(radius);
+    mls.process(*mls_points);
 }

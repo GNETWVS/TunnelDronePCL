@@ -42,6 +42,31 @@ struct TransformData
     double roty = 0;
     double rotz = 0;
     double confidence = 0;  // 0-1; used to determine number of registration iterations
+
+    TransformData operator+(const TransformData& other)
+    {
+      TransformData t;
+      t.dx = this->dx + other.dx;
+      t.dy = this->dy + other.dy;
+      t.dz = this->dz + other.dz;
+      t.rotx = this->rotx + other.rotx;
+      t.roty = this->roty + other.roty;
+      t.rotz = this->rotz + other.rotz;
+      t.confidence = this->confidence + other.confidence;
+      return t;
+    }
+    TransformData operator-(const TransformData& other)
+    {
+      TransformData t;
+      t.dx = this->dx - other.dx;
+      t.dy = this->dy - other.dy;
+      t.dz = this->dz - other.dz;
+      t.rotx = this->rotx - other.rotx;
+      t.roty = this->roty - other.roty;
+      t.rotz = this->rotz - other.rotz;
+      t.confidence = this->confidence - other.confidence;
+      return t;
+    }
 };
 
 // The resultant cloud after multiple point clouds have been registered
@@ -62,5 +87,6 @@ void removeOutliers(PointCloudT::Ptr cloud, const int num_neighbours, const int 
 void downSample(PointCloudT::Ptr cloud, const int leaf_size);
 void transform(PointCloudT::Ptr cloud, const TransformData& t);
 void filterRangeZ(PointCloudT::Ptr cloud, const double minZ, const double maxZ);
+void reconstructSurface(pcl::PointCloud<pcl::PointNormal>::Ptr mls_points, const PointCloudT::Ptr cloud, const double radius);
 
 #endif
