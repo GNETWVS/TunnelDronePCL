@@ -1,6 +1,10 @@
 #ifndef STITCHED_CLOUD_H
 #define STITCHED_CLOUD_H
 
+#include <chrono>
+
+#include <boost/progress.hpp>
+
 #include <pcl/common/common.h>
 #include <pcl/conversions.h>
 #include <pcl/io/pcd_io.h>

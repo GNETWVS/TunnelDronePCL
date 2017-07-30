@@ -3,39 +3,33 @@
 StitchedCloud::StitchedCloud(PointCloudT::Ptr point_cloud)
 {
     stitched_cloud = point_cloud;
-    removeOutliers(stitched_cloud, 100, 2);
-    downSample(stitched_cloud, 100);
+    downSample(stitched_cloud, 200);
+    removeOutliers(stitched_cloud, 100, 1);
     filterRangeZ(stitched_cloud, 0, 10000);
 }
 
 void StitchedCloud::addCloud(PointCloudT::Ptr new_cloud, const TransformData& transformation)
 {
-    // Use private member functions to register a new cloud to the overall stitched cloud
     // Uses given transformation data to improve the speed of registration
 
     /*          Pre-Processing          */
-    pcl::console::print_highlight("Remove outliers\n");
+    downSample(new_cloud, 200);
     removeOutliers(new_cloud, 100, 1);
-    pcl::console::print_highlight("Downsample (1)\n");
-    downSample(new_cloud, 100);
-    pcl::console::print_highlight("Transform\n");
     transform(new_cloud, transformation);
-    pcl::console::print_highlight("Passthrough filter\n");
     filterRangeZ(new_cloud, 0, 10000);
     /*          Registration            */
-    registerWithSAC(new_cloud, 10);
-    registerWithICP(new_cloud, 10);
+    registerWithSAC(new_cloud, 20);
+    registerWithICP(new_cloud, 20);
     *stitched_cloud += *new_cloud;
     /*          Post-Processing         */
-    pcl::console::print_highlight("Downsample (2)\n");
-    downSample(stitched_cloud, 100);
+    downSample(stitched_cloud, 200);
+    removeOutliers(new_cloud, 100, 1);
 }
 
 void StitchedCloud::registerWithICP(PointCloudT::Ptr cloud, const int iters)
 {
     // Transforms 'cloud' such that it more closely aligns with the stitched cloud
     // Accurate results but slow run time
-    pcl::console::print_highlight("Iterative closest point\n");
     pcl::IterativeClosestPoint<PointT, PointT> icp;
     icp.setMaximumIterations(iters);
     icp.setInputSource(cloud);
@@ -51,7 +45,6 @@ void StitchedCloud::registerWithSAC(PointCloudT::Ptr cloud, const int iters)
     // Useful for fast but rough registration
 
     // Estimate normals in the cloud
-    pcl::console::print_highlight("Normals\n");
     pcl::PointCloud<pcl::Normal>::Ptr src_normals (new pcl::PointCloud<pcl::Normal> ());
     pcl::PointCloud<pcl::Normal>::Ptr stitched_normals (new pcl::PointCloud<pcl::Normal> ());
     pcl::NormalEstimationOMP<PointT, pcl::Normal> normal_est;
@@ -64,7 +57,6 @@ void StitchedCloud::registerWithSAC(PointCloudT::Ptr cloud, const int iters)
     normal_est.compute(*stitched_normals);
 
     // Locate features using the normals and clouds
-    pcl::console::print_highlight("Fast point feature histogram\n");
     pcl::FPFHEstimationOMP<PointT, pcl::Normal, pcl::FPFHSignature33> fpfh;
     pcl::PointCloud<pcl::FPFHSignature33>::Ptr src_features (new pcl::PointCloud<pcl::FPFHSignature33> ());
     pcl::PointCloud<pcl::FPFHSignature33>::Ptr stitched_features (new pcl::PointCloud<pcl::FPFHSignature33> ());
@@ -78,7 +70,6 @@ void StitchedCloud::registerWithSAC(PointCloudT::Ptr cloud, const int iters)
     fpfh.compute(*stitched_features);
 
     // Use the features found to perform the alignment
-    pcl::console::print_highlight("Sample consensus initial alignment\n");
     pcl::SampleConsensusInitialAlignment<PointT, PointT, pcl::FPFHSignature33> sac_ia;
     sac_ia.setMaximumIterations(iters);
     // Stitched

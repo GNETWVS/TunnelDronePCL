@@ -8,6 +8,7 @@ typedef pcl::PointCloud<PointT> PointCloudT;
 
 void helpMessage();
 void getTransformationData(std::ifstream& infile, std::vector<TransformData>& translation_and_rotation_raw, char delim);
+void averageTransformationData(std::vector<TransformData>& transformations, const int vals_per_cloud);
 void getFileList(const std::string& path, std::vector<std::string>& files);
 
 // General outline
@@ -27,6 +28,9 @@ static bool filePredicate(const std::string &s)
 
 int main(int argc, char** argv)
 {
+    // NB TEMP
+    auto start = std::chrono::system_clock::now();
+
     /*          Handle Input        */
     // Check whether a file has been supplied
     if (argc < 3)
@@ -68,6 +72,11 @@ int main(int argc, char** argv)
         std::ifstream infile(argv[4]);
         char delim = ';';
         try { getTransformationData(infile, cloud_transformations, delim); } catch (std::exception& e) { e.what(); }
+        averageTransformationData(cloud_transformations, cloud_transformations.size() / files_to_process.size());
+        for (auto& t : cloud_transformations)
+        {
+            std::cout << t.dx << "\n";
+        }
     }
     else
     {
@@ -107,9 +116,6 @@ int main(int argc, char** argv)
     std::sort(files_to_process.begin(), files_to_process.end(), compareFilenames);
 
     /*          Process Point Clouds                */
-    // TODO Make this multithreaded
-    // Maybe store a vector of StitchedCloud objects?
-
     PointCloudT::Ptr first_cloud (new PointCloudT());
     std::string path = directory + files_to_process[0];
     pcl::PCDReader reader;
@@ -119,25 +125,34 @@ int main(int argc, char** argv)
     // TODO Set the first point cloud as being centre at the origin (translation by cloud_transformations[0])
     // Not coded yet - just planning
 
+    // Display a progress bar
+    boost::progress_display progress_bar(files_to_process.size()-1);
+
     // Add each new cloud to the stitched_cloud
     PointCloudT::Ptr new_cloud (new PointCloudT());
     for (int i = 1; i < files_to_process.size(); ++i)
     {
         path = directory + files_to_process[i];
-        std::cout << "Reading: " << files_to_process[i] << std::endl;
         reader.read(path, *new_cloud);
         // Remove any NaNs to improve speed
         std::vector<int> tmp;
         pcl::removeNaNFromPointCloud(*new_cloud, *new_cloud, tmp);
-        // Add this cloud to the stitched cloud 
+        // Add this cloud to the stitched cloud
         stitchedCloud.addCloud(new_cloud, cloud_transformations[i]);
+        ++progress_bar;
     }
 
     // Write the resulting point cloud
-    pcl::io::savePCDFileASCII(directory + "filtered.pcd", *(stitchedCloud.stitched_cloud));
+    pcl::io::savePCDFile(directory + "/filtered.pcd", *(stitchedCloud.stitched_cloud));
 
 
-    return 1;
+    // NB TEMP
+    auto end = std::chrono::system_clock::now();
+    auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(end - start);
+    std::cout << "Total time elapsed: " << elapsed.count()/1000.0 << " s\n"
+              << "Average time per cloud: " << elapsed.count()/files_to_process.size()/1000.0 << " s" << std::endl;
+
+    return 0;
 }
 
 void helpMessage()
@@ -194,6 +209,41 @@ void getTransformationData(std::ifstream& infile, std::vector<TransformData>& tr
         else
             std::cout << "WARNING: No confidence value given for transformation data.\n";
         translation_and_rotation_raw.push_back(t_data);
+    }
+}
+
+void averageTransformationData(std::vector<TransformData>& transformations, const int vals_per_cloud)
+{
+    // Take the average value of each translation and rotation over vals_per_cloud elements
+    for (int i = 0; i < transformations.size() + vals_per_cloud; i += vals_per_cloud)
+    {
+        for (int j = 1; j < vals_per_cloud; ++j)
+        {
+            transformations[i].dx += transformations[i+j].dx;
+            transformations[i].dy += transformations[i+j].dy;
+            transformations[i].dz += transformations[i+j].dz;
+            transformations[i].rotx += transformations[i+j].rotx;
+            transformations[i].roty += transformations[i+j].roty;
+            transformations[i].rotz += transformations[i+j].rotz;
+            transformations[i].confidence += transformations[i+j].confidence;
+        }
+        transformations[i].dx /= vals_per_cloud;
+        transformations[i].dy /= vals_per_cloud;
+        transformations[i].dz /= vals_per_cloud;
+        transformations[i].rotx /= vals_per_cloud;
+        transformations[i].roty /= vals_per_cloud;
+        transformations[i].rotz /= vals_per_cloud;
+        transformations[i].confidence /= vals_per_cloud;
+    }
+
+    int i = 0;
+    while (i < transformations.size())
+    {
+        for (int j = 0; j < vals_per_cloud; ++j)
+        {
+            transformations.erase(transformations.begin() + i + 1);
+        }
+        ++i;
     }
 }
 
