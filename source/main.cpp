@@ -28,7 +28,7 @@ static bool filePredicate(const std::string &s)
 
 int main(int argc, char** argv)
 {
-    // NB TEMP
+    // Start the timer
     auto start = std::chrono::system_clock::now();
 
     /*          Handle Input        */
@@ -138,19 +138,17 @@ int main(int argc, char** argv)
     }
 
     // Reconstruct the surface
-    pcl::PointCloud<pcl::PointNormal>::Ptr mls_points (new pcl::PointCloud<pcl::PointNormal>());
-    reconstructSurface(mls_points, stitchedCloud.stitched_cloud, 500);
+    // pcl::PointCloud<pcl::PointNormal>::Ptr mls_points (new pcl::PointCloud<pcl::PointNormal>());
+    // reconstructSurface(mls_points, stitchedCloud.stitched_cloud, 500);
 
     // Write the resulting point cloud
-    // pcl::io::savePCDFile(directory + "/filtered.pcd", *(stitchedCloud.stitched_cloud));
-    pcl::io::savePCDFile(directory + "/filtered.pcd", *mls_points);
+    pcl::io::savePCDFile(directory + "/filtered.pcd", *(stitchedCloud.stitched_cloud));
+    // pcl::io::savePCDFile(directory + "/filtered.pcd", *mls_points);
 
-
-    // NB TEMP
+    // Timing
     auto end = std::chrono::system_clock::now();
-    auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(end - start);
-    std::cout << "Total time elapsed: " << elapsed.count()/1000.0 << " s\n"
-              << "Average time per cloud: " << elapsed.count()/files_to_process.size()/1000.0 << " s" << std::endl;
+    stitchedCloud.timeBreakdown.total_time = std::chrono::duration_cast<std::chrono::milliseconds>(end - start)/1000.0;
+    stitchedCloud.timeBreakdown.print();
 
     return 0;
 }
